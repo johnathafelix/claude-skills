@@ -34,10 +34,31 @@ claude plugin marketplace add anthropics/claude-plugins-official
 /plugin install claude-skills@claude-skills
 ```
 
-### 3. Optional extras
+### 3. Optional: graph skills (`code-review-graph`)
 
-- **Status line** — ships in this repo but can't be auto-installed by a plugin; wire it up by hand (see [Status line](#status-line-optional-manual-setup)).
-- **Graph skills** — `debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes` need the private `code-review-graph` MCP server (see [Dependencies & caveats](#dependencies--caveats)).
+The four graph skills — `debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes` — call the `code-review-graph` MCP tools, so they need its server. It's a public Python package. Set it up once:
+
+1. Install the CLI (needs Python ≥ 3.10 and [pipx](https://pipx.pypa.io)):
+   ```bash
+   pipx install code-review-graph
+   ```
+2. Register its MCP server with Claude Code — this plugin already ships the graph skills, so skip its own copies:
+   ```bash
+   code-review-graph install --platform claude-code --no-skills
+   ```
+   It can also add auto-update hooks and inject graph instructions into `CLAUDE.md`; see `code-review-graph install --help`.
+3. Build the graph in each repo you want to use it in:
+   ```bash
+   cd /path/to/repo
+   code-review-graph build
+   ```
+   After that it updates incrementally (via the hooks step 2 installs, or `code-review-graph watch`).
+
+Without this, only the four graph skills are inert — the rest of the plugin works fine.
+
+### 4. Optional: status line
+
+Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (see [Status line](#status-line-optional-manual-setup)).
 
 ## What's inside
 
@@ -75,7 +96,7 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 ## Dependencies & caveats
 
 - **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
-- **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the private **`code-review-graph` MCP server**. Without it they have nothing to call — install/configure that MCP first, or ignore these four skills. (MCP servers can't be plugin dependencies, so this stays a documented soft prerequisite.)
+- **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the **`code-review-graph` MCP server** (a public PyPI package). See [Setup → graph skills](#3-optional-graph-skills-code-review-graph) to install it; MCP servers can't be plugin dependencies, so this stays a documented prerequisite.
 
 ## Status line (optional, manual setup)
 
