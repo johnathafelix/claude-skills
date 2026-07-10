@@ -108,7 +108,6 @@ They all live in Claude Code's built-in **`claude-plugins-official`** marketplac
 ```
 /plugin install code-review@claude-plugins-official
 /plugin install context7@claude-plugins-official
-/plugin install feature-dev@claude-plugins-official
 /plugin install frontend-design@claude-plugins-official
 /plugin install pr-review-toolkit@claude-plugins-official
 /plugin install gopls-lsp@claude-plugins-official
@@ -120,7 +119,6 @@ They all live in Claude Code's built-in **`claude-plugins-official`** marketplac
 |---|---|
 | `code-review` | Automated PR review with multiple agents + confidence scoring |
 | `context7` | MCP server for up-to-date, version-specific library docs |
-| `feature-dev` | Feature-dev workflow — explore, design, and review agents |
 | `frontend-design` | Distinctive, production-grade frontend UI generation |
 | `pr-review-toolkit` | PR-review agents — comments, tests, error handling, type design, quality |
 | `gopls-lsp` | Go language server (code intelligence, refactoring) |
