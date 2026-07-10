@@ -1,8 +1,3 @@
----
-name: ts-no-magic-values
-description: USE WHEN writing code that contains hard-coded string literals, magic numbers, hard-coded booleans, or unexplained constants. Apply when defining enums, const objects, typed config, branded types, or lookup tables for repeated values. Covers named constants, constant registries with as const, literal unions, lookup tables with satisfies, discriminated unions, string/numeric enums, typed config modules, env var parsing, unit helpers, branded types, template literal types, i18n key registries, dependency injection, and feature flags.
----
-
 # Avoid Magic Values — Use Strongly Typed Constants, Registries, and Types
 
 Magic values (unexplained literals like `"PENDING"`, `42`, `true`, `3_600_000`) increase cognitive load, encourage duplication, and make refactors brittle because meaning lives in people's heads instead of code. The highest-return strategy is to **systematically turn "meaning" into names and types**, using TypeScript's literal types, `as const`, discriminated unions, and `satisfies`.

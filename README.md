@@ -4,7 +4,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **17 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, and code-graph navigation.
+- **14 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, and code-graph navigation.
 - **1 agent** — `go-idiom-checker`, the restricted sub-agent the `golang-check` skill fans out to.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
@@ -35,10 +35,7 @@ Then restart Claude Code (or run `/plugin`) and the skills + hooks are active. T
 | `tdd` | Test-driven development (red-green-refactor) |
 | `write-pending-unit-tests` | Write tests for files changed vs. the base branch |
 | `golang-check` | Check Go code against Go conventions (fans out per-guideline) |
-| `ts-check` | Run all TypeScript quality checks on changed files |
-| `ts-strong-types` | Remove `any`, add boundary validation, strengthen types |
-| `ts-no-magic-values` | Replace magic strings/numbers with named constants |
-| `ts-data-over-logic` | Replace conditional logic with data structures |
+| `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — self-contained, fans out per-guideline |
 | `check-rest-api-design` | Review a REST/HTTP API against design best practices |
 | `debug-issue` | Systematically debug using graph-powered navigation † |
 | `explore-codebase` | Navigate codebase structure via the knowledge graph † |

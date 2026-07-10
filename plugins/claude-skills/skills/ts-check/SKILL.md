@@ -5,7 +5,7 @@ description: Run all TypeScript quality checks (strong types, no magic values, d
 
 # TypeScript Quality Check — Orchestrator
 
-Run three TypeScript quality analyses in parallel, collect their findings, then apply all fixes in one pass.
+Run the TypeScript quality analyses in parallel, collect their findings, then apply all fixes in one pass. Each check is a self-contained rule spec under `guidelines/`, so this skill has no dependency on any other skill.
 
 ## Procedure
 
@@ -19,85 +19,42 @@ First, determine the correct base branch to diff against:
 
 Store the result as `BASE_BRANCH` and use `origin/$BASE_BRANCH` for subsequent diff commands.
 
-Then identify the TypeScript files to analyse. Use the same scope for all three sub-checks:
+Then identify the TypeScript files to analyse. Use the same scope for all sub-checks:
 
 - If the user specified files or directories, use those.
 - Otherwise, run `git fetch origin $BASE_BRANCH` then use `git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM` filtered to `*.ts` and `*.tsx` files.
 - If there are no changed files, fall back to the files in the current working directory (non-recursive).
 
-### Step 2 — Load rules from source skills
+If the scope is empty, report that there is nothing to check and stop.
 
-Read the three skill definition files to get the **latest** rules:
+### Step 2 — Load guidelines
 
-1. `~/.claude/skills/ts-strong-types/SKILL.md`
-2. `~/.claude/skills/ts-no-magic-values/SKILL.md`
-3. `~/.claude/skills/ts-data-over-logic/SKILL.md`
+Every check lives in its own file in the `guidelines/` directory that sits **alongside this SKILL.md**. Resolve that directory to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`).
 
-Use the Read tool to fetch all three in parallel. The full content of each file will be passed verbatim to its corresponding subagent in Step 3.
+Read all four guideline files, in this **priority order** (it drives fix-conflict resolution in Step 5):
 
-### Step 3 — Launch four subagents in parallel
+1. `guidelines/strong-types.md`
+2. `guidelines/no-magic-values.md`
+3. `guidelines/data-over-logic.md`
+4. `guidelines/redundant-variable-inline.md`
 
-Spawn **four** Agent calls **in the same message** (parallel), one per check. Each agent must:
+The full text of each file is passed verbatim to its corresponding sub-agent in Step 3.
 
-1. Receive the full rules text loaded from its SKILL.md in Step 2.
-2. Receive the list of in-scope files from Step 1.
+### Step 3 — Launch one sub-agent per guideline (parallel)
+
+Spawn one `general-purpose` Agent call per guideline **in the same message** (parallel). Each agent must:
+
+1. Receive the full rules text of its guideline from Step 2.
+2. Receive the list of in-scope files from Step 1, with a one-line note of what changed (focus the check on the changed lines).
 3. Read those files.
-4. Apply the rules to find violations.
-5. Return a structured list of findings: `{ file, line, rule, description, suggestedFix }`.
+4. Apply **only** that one guideline to find violations; report only findings it is confident about (prefer silence over a shaky flag).
+5. Return a structured list of findings: `{ file, line, rule, description, suggestedFix }`, where `rule` is the guideline's filename stem (e.g. `strong-types`, `redundant-variable-inline`).
 
-**Do NOT make edits inside the subagents — they only analyse and report.**
-
-#### Subagent A — Strong Types
-
-Pass the full content of `ts-strong-types/SKILL.md` as the rules.
-
-#### Subagent B — No Magic Strings
-
-Pass the full content of `ts-no-magic-values/SKILL.md` as the rules.
-
-#### Subagent C — Data Over Logic
-
-Pass the full content of `ts-data-over-logic/SKILL.md` as the rules.
-
-#### Subagent D — Redundant Variable Inlining
-
-Pass the following rules inline (no external SKILL.md):
-
-**Rule: Inline variables that are declared and immediately returned.**
-
-When a local variable is declared and its only use is the very next `return` statement (no reads, no re-assignments, no further references), inline it into the `return`.
-
-Examples:
-
-```ts
-// ❌ Redundant binding
-const exportedWorkflow = await this.buildExportWorkflow(workflowId);
-return exportedWorkflow;
-
-// ✅ Inlined
-return await this.buildExportWorkflow(workflowId);
-```
-
-```ts
-// ❌ Redundant binding
-const result = computeThing(input);
-return result;
-
-// ✅ Inlined
-return computeThing(input);
-```
-
-**Do NOT inline when:**
-- The variable is referenced anywhere else (logged, passed to another call, used in a `finally`, etc.).
-- The variable has an explicit type annotation that is load-bearing for readability or type-narrowing (e.g., `const x: SpecificType = ...; return x;` where removing the annotation would lose information). In that case, keep the binding.
-- The declaration and return are separated by other statements that could change meaning if reordered.
-- Inlining would harm debuggability in a way the author clearly intended (e.g., a name that documents intent for a complex expression). Prefer inlining unless the name adds real value beyond the function name itself.
-
-**Return findings as:** `{ file, line, rule: 'redundant-variable-inline', description, suggestedFix }` where `suggestedFix` shows the inlined `return` statement.
+**Do NOT make edits inside the sub-agents — they only analyse and report.**
 
 ### Step 4 — Merge and deduplicate findings
 
-After all three agents return:
+After all agents return:
 
 1. Merge all findings into a single list, sorted by file then line number.
 2. Deduplicate — if two checks flag the same line, keep both rules but combine into one action item.

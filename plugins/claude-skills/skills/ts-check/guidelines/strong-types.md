@@ -1,8 +1,3 @@
----
-name: ts-strong-types
-description: USE WHEN refactoring code that contains 'any' type signatures, implementing generic functions that need type safety. Also apply when reviewing code for type safety improvements. Covers compiler/ESLint gates, boundary validation with unknown, generics for passthrough code, discriminated unions, typed dictionaries, replacing `as any` with satisfies/assertion functions, removing Function type, safe error channels, third-party typing patches, and utility/mapped types.
----
-
 # The Stronger the Types, the Weaker the Bugs
 
 TypeScript is as helpful as its types. Removing `any` is less about "typing everything" and more about controlling **where uncertainty is allowed**. `any` disables type checking and can be assigned to/from anything, so it tends to "infect" nearby types and obscure real bugs. The most effective approach is to (a) prevent new `any` from entering, (b) move unavoidable uncertainty to **explicit boundaries** using `unknown`, then (c) rapidly narrow to precise domain types using type guards, discriminated unions, and generics.

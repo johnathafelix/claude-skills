@@ -1,8 +1,3 @@
----
-name: ts-data-over-logic
-description: Replace conditional logic with data structures in TypeScript. USE WHEN refactoring complex conditional logic, implementing role-based access control, building middleware or pipeline patterns, creating configuration-driven features, designing rule engines, or building declarative systems. Apply when you see if/else chains, switch statements, or loops that could be replaced with data structures. Also covers policy/mechanism separation, schema validation, tagged unions, boundary validation, pure interpreters, extension registries, versioned data, explainability, and selective application of the pattern.
----
-
 # Data Over Logic: Practical Rules for Data-Driven Design in TypeScript
 
 Replace conditional logic (if/else, switches, loops) with data structures. Use configuration-driven and declarative approaches instead of imperative control flow. Represent **variation** (policies, workflows, UI structure, business rules, routing, pricing, permissions) as **declarative data**, and keep the **mechanism** (evaluation, orchestration, rendering, execution) in **stable, generic code**.
