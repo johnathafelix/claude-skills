@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-skills",
+  "description": "johnathafelix's personal Claude Code skills and hooks, packaged as an installable plugin.",
+  "owner": {
+    "name": "johnathafelix",
+    "url": "https://github.com/johnathafelix"
+  },
+  "plugins": [
+    {
+      "name": "claude-skills",
+      "source": "./plugins/claude-skills",
+      "description": "Dev-workflow skills (git, PRs, TDD, TS/Go checks, REST API review, graph helpers) + guardrail hooks.",
+      "category": "productivity"
+    }
+  ]
+}

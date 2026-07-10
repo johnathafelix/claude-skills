@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# Local Claude Code state (machine-specific, not part of the plugin)
+.claude/
+.code-review-graph/
