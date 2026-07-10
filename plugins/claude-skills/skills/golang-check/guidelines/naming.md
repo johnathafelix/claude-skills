@@ -2,7 +2,7 @@
 
 Names are the readable surface of Go code. Check identifiers against Go naming idioms. You check ONLY naming — declarations, types, and docs are other guidelines' jobs.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/idioms.md`
+Extended examples (consult only for an ambiguous case): `../references/idioms.md`
 
 ## Flag
 

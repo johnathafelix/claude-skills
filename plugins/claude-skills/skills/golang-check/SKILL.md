@@ -27,9 +27,9 @@ If the filtered list is empty, report that there is nothing to check and stop.
 
 ### Step 2 — Load guidelines
 
-List `~/.claude/skills/golang-check/guidelines/*.md` and Read each one. Each file is a self-contained rule spec — a cohesive group of closely-related checks (e.g. `errors.md`, `concurrency.md`, `type-design.md`) — and its full text is handed to one sub-agent in Step 3. The set is discovered dynamically: drop in a new `.md` and it becomes another parallel sub-agent with no change here.
+List every `*.md` in the `guidelines/` directory that sits **alongside this SKILL.md** and Read each one. Resolve that directory to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`); you will need that absolute path again in Step 3 to pass each guideline file to its sub-agent. Each file is a self-contained rule spec — a cohesive group of closely-related checks (e.g. `errors.md`, `concurrency.md`, `type-design.md`) — and its full text is handed to one sub-agent in Step 3. The set is discovered dynamically: drop in a new `.md` and it becomes another parallel sub-agent with no change here.
 
-Extended examples for each guideline live in `~/.claude/skills/golang-check/references/`; sub-agents consult them only for ambiguous cases.
+Extended examples for each guideline live in the `references/` directory alongside this SKILL.md; sub-agents consult them only for ambiguous cases.
 
 Skip a guideline only when it cannot apply to the scope (e.g. `testing.md` when no `*_test.go` files are in scope, `doc-comments.md`/`testing.md` if the user asked to exclude them).
 
@@ -43,7 +43,7 @@ Dispatch each guideline to its own sub-agent with `subagent_type: go-idiom-check
 
 Each sub-agent's prompt must:
 
-1. Name its guideline file by **absolute path** and instruct it to Read the file IN FULL — pass the path, not a summary or paraphrase.
+1. Name its guideline file by **absolute path** and instruct it to Read the file IN FULL — pass the path, not a summary or paraphrase. (A guideline may cite an extended-examples file as `../references/<name>.md`; that path is relative to the guideline file, so resolve it against the absolute guideline path you passed.)
 2. Give the in-scope file list from Step 1 plus a one-line note of what changed (focus the check on the changed lines).
 3. Apply **only** that one guideline; read-only, never edit; report only findings it is confident about (prefer silence over a shaky flag).
 4. **End the prompt with the output contract** (put it last, for recency): the entire final message must be a single JSON array — `[]` if nothing is found, otherwise objects shaped as below, with nothing before or after.

@@ -2,7 +2,7 @@
 
 Package layout, imports, and intra-file organisation. Some of this is judged per file; package-layout findings are lower confidence without the whole tree — say so.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/structure.md`
+Extended examples (consult only for an ambiguous case): `../references/structure.md`
 
 ## Flag
 

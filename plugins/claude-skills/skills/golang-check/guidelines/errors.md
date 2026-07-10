@@ -2,7 +2,7 @@
 
 Creation, wrapping, matching, and control flow of errors. This is the only guideline that checks error semantics.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/errors.md`
+Extended examples (consult only for an ambiguous case): `../references/errors.md`
 
 ## Flag
 

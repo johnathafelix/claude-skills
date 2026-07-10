@@ -2,7 +2,7 @@
 
 Goroutines, channels, synchronisation, context cancellation, and data races. Concurrency bugs are high-cost — flag confidently but explain the race/leak.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/concurrency.md`
+Extended examples (consult only for an ambiguous case): `../references/concurrency.md`
 
 ## Flag
 

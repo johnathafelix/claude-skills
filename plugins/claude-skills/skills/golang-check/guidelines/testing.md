@@ -2,7 +2,7 @@
 
 Test structure, assertions, doubles, and reliability. Scope: `*_test.go` files (and benchmark files). If no test files are in scope, return no findings.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/testing.md`
+Extended examples (consult only for an ambiguous case): `../references/testing.md`
 
 ## Flag
 

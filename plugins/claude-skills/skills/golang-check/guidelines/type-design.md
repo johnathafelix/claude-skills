@@ -2,7 +2,7 @@
 
 How types, interfaces, receivers, and package-level state are designed.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/idioms.md`
+Extended examples (consult only for an ambiguous case): `../references/idioms.md`
 
 ## Accept interfaces, return structs (highest signal)
 

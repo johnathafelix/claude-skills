@@ -2,7 +2,7 @@
 
 Documentation completeness and form for the exported surface. This is a focused, single-topic check.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/structure.md`
+Extended examples (consult only for an ambiguous case): `../references/structure.md`
 
 ## Flag
 

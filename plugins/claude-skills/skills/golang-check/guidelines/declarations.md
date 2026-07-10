@@ -2,7 +2,7 @@
 
 Local value construction: variable declaration style, slices, maps, struct literals, enums. Statement-level idioms only.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/idioms.md`
+Extended examples (consult only for an ambiguous case): `../references/idioms.md`
 
 ## Flag
 

@@ -10,7 +10,7 @@ express it as a `map`/slice lookup. Keep branching when arms carry real logic.
 allocates per invocation. Suggest hoisting to package scope for hot paths; an inline
 literal is acceptable only on a cold path where locality aids readability.
 
-Extended examples + the allocation/default patterns: `~/.claude/skills/golang-check/references/data-over-logic.md`
+Extended examples + the allocation/default patterns: `../references/data-over-logic.md`
 
 ## Flag
 

@@ -2,7 +2,7 @@
 
 Subtle Go pitfalls that compile fine but misbehave at runtime. Each finding should name the concrete bug, not a style preference.
 
-Extended examples (consult only for an ambiguous case): `~/.claude/skills/golang-check/references/gotchas.md`
+Extended examples (consult only for an ambiguous case): `../references/gotchas.md`
 
 ## Flag
 

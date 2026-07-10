@@ -12,7 +12,7 @@ orchestrator enforces the `requires-go-version` marker above). Do not offer 1.26
 features in a file that lowers itself with an explicit older `//go:build go1.NN` tag.
 
 Extended examples + the full modernizer catalog (consult for before→after of each and
-for edge cases): `~/.claude/skills/golang-check/references/modernizers.md`
+for edge cases): `../references/modernizers.md`
 
 ## How to check
 
