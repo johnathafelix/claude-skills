@@ -102,7 +102,7 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 
 Other Claude Code plugins I run alongside `claude-skills`. (`code-simplifier` isn't here — it's already a required dependency and installs automatically.)
 
-Most live in Claude Code's built-in **`claude-plugins-official`** marketplace, so one command installs each:
+They all live in Claude Code's built-in **`claude-plugins-official`** marketplace, so one command installs each:
 
 ```
 /plugin install code-review@claude-plugins-official
@@ -125,15 +125,6 @@ Most live in Claude Code's built-in **`claude-plugins-official`** marketplace, s
 | `gopls-lsp` | Go language server (code intelligence, refactoring) |
 | `pyright-lsp` | Python language server (Pyright) — type checking |
 | `typescript-lsp` | TypeScript/JavaScript language server |
-
-**`codex`** lives in a separate marketplace — add it first, then install:
-
-```
-/plugin marketplace add openai/codex-plugin-cc
-/plugin install codex@openai-codex
-```
-
-Use OpenAI Codex from Claude Code to review code or delegate tasks.
 
 ## Status line (optional, manual setup)
 
