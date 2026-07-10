@@ -8,18 +8,36 @@ This repo is a **plugin marketplace** containing a single plugin, `claude-skills
 - **1 agent** — `go-idiom-checker`, the restricted sub-agent the `golang-check` skill fans out to.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
-## Install
+## Setup
+
+### 1. Install the plugin
 
 ```
 /plugin marketplace add johnathafelix/claude-skills
 /plugin install claude-skills@claude-skills
 ```
 
-Then restart Claude Code (or run `/plugin`) and the skills + hooks are active. To update later:
+Restart Claude Code (or run `/plugin`) and the skills + hooks are active. Update later with `/plugin marketplace update claude-skills`.
+
+### 2. Required dependency — `code-simplifier`
+
+`claude-skills` declares a hard dependency on the `code-simplifier` plugin — the `auto-code-simplifier.js` Stop hook drives its agent, so the plugin **will not load** without it. It lives in Claude Code's built-in **`claude-plugins-official`** marketplace and is **auto-installed** with `claude-skills`, so on a normal machine there's no extra step.
+
+On a bare setup where `claude-plugins-official` isn't registered yet, the install fails to load with a message like:
+
+> Dependency "code-simplifier@claude-plugins-official" is not installed — run `claude plugin install code-simplifier@claude-plugins-official`, or check that its marketplace is added
+
+Fix it once by adding the official marketplace, then (re)install:
 
 ```
-/plugin marketplace update claude-skills
+claude plugin marketplace add anthropics/claude-plugins-official
+/plugin install claude-skills@claude-skills
 ```
+
+### 3. Optional extras
+
+- **Status line** — ships in this repo but can't be auto-installed by a plugin; wire it up by hand (see [Status line](#status-line-optional-manual-setup)).
+- **Graph skills** — `debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes` need the private `code-review-graph` MCP server (see [Dependencies & caveats](#dependencies--caveats)).
 
 ## What's inside
 
@@ -56,7 +74,7 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 
 ## Dependencies & caveats
 
-- **Required plugin dependency: `code-simplifier`** (from the official `claude-plugins-official` marketplace). The `auto-code-simplifier.js` Stop hook drives its agent, so it's declared as a hard dependency in `plugin.json` and is **auto-installed** when you install `claude-skills`. This needs the `claude-plugins-official` marketplace to be registered — it's Claude Code's built-in official marketplace, so it's present by default; if it isn't, add it once with `claude plugin marketplace add anthropics/claude-plugins-official` (the plugin will tell you if it's missing).
+- **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
 - **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the private **`code-review-graph` MCP server**. Without it they have nothing to call — install/configure that MCP first, or ignore these four skills. (MCP servers can't be plugin dependencies, so this stays a documented soft prerequisite.)
 
 ## Status line (optional, manual setup)
