@@ -17,7 +17,17 @@ This repo is a **plugin marketplace** containing a single plugin, `claude-skills
 /plugin install claude-skills@claude-skills
 ```
 
-Restart Claude Code (or run `/plugin`) and the skills + hooks are active. Update later with `/plugin marketplace update claude-skills`.
+Restart Claude Code (or run `/plugin`) and the skills + hooks are active.
+
+To update later (this plugin sets no `version`, so it's tracked by git commit — every push counts as an update):
+
+```
+/plugin marketplace update claude-skills
+/plugin update claude-skills@claude-skills
+/reload-plugins
+```
+
+`marketplace update` refreshes from GitHub, `plugin update` installs the latest commit, and `/reload-plugins` applies it without a full restart.
 
 ### 2. Required dependency — `code-simplifier`
 
