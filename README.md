@@ -4,7 +4,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **14 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, and code-graph navigation.
+- **15 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, and writing cleanup.
 - **1 agent** — `go-idiom-checker`, the restricted sub-agent the `golang-check` skill fans out to.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
@@ -80,6 +80,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `explore-codebase` | Navigate codebase structure via the knowledge graph † |
 | `refactor-safely` | Plan/execute refactors using dependency analysis † |
 | `review-changes` | Risk-aware code review via change detection + impact † |
+| `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 
 ### Hooks
 
