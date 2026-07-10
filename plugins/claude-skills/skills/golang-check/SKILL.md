@@ -37,7 +37,7 @@ Skip a guideline only when it cannot apply to the scope (e.g. `testing.md` when 
 
 ### Step 3 — Launch sub-agents (batched, one guideline each)
 
-Dispatch each guideline to its own sub-agent with `subagent_type: go-idiom-checker` — a read-only, restricted-tool agent whose minimal injected context makes it far less likely to derail than `general-purpose` (see the reliability note in Step 4).
+Dispatch each guideline to its own sub-agent with `subagent_type: claude-skills:go-idiom-checker` — a read-only, restricted-tool agent whose minimal injected context makes it far less likely to derail than `general-purpose` (see the reliability note in Step 4).
 
 **Concurrency: launch at most 4 sub-agents at a time, awaiting each batch before starting the next.** Large fan-outs (10+ at once) measurably raise the rate at which a sub-agent ignores its prompt and returns hallucinated boilerplate with 0 tool calls instead of findings; small batches sharply reduce it.
 
@@ -80,7 +80,7 @@ Re-dispatch each derailed guideline (Step 3), alone or in a small batch. If it s
 2. Present a numbered checklist of `file:line — symbol — description` with severity/confidence, grouped by guideline and sorted by file then line within each group.
 3. If every validated sub-agent returned empty, report the code is clean against the current guidelines. Always list any **UNVERIFIED** (retry-exhausted) or version-skipped guidelines so coverage gaps are explicit.
 
-> **Reliability note.** Sub-agents receive large injected context attachments (a deferred-tool list + the skill catalog, ~36 KB for `general-purpose`). Under high fan-out this occasionally makes a sub-agent ignore its task prompt and emit hallucinated system-prompt-like text with 0 tool calls instead of findings. Two mitigations, layered: (1) `subagent_type: go-idiom-checker` restricts the toolset so those attachments shrink, and small batches (Step 3) lower the trigger rate; (2) the derailment detector + retry (4a) catches whatever still slips through, so a derailed check is never silently counted as clean.
+> **Reliability note.** Sub-agents receive large injected context attachments (a deferred-tool list + the skill catalog, ~36 KB for `general-purpose`). Under high fan-out this occasionally makes a sub-agent ignore its task prompt and emit hallucinated system-prompt-like text with 0 tool calls instead of findings. Two mitigations, layered: (1) `subagent_type: claude-skills:go-idiom-checker` restricts the toolset so those attachments shrink, and small batches (Step 3) lower the trigger rate; (2) the derailment detector + retry (4a) catches whatever still slips through, so a derailed check is never silently counted as clean.
 
 ### Step 5 — Fixes (only when asked)
 
