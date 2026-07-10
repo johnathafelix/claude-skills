@@ -98,6 +98,43 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 - **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
 - **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the **`code-review-graph` MCP server** (a public PyPI package). See [Setup → graph skills](#3-optional-graph-skills-code-review-graph) to install it; MCP servers can't be plugin dependencies, so this stays a documented prerequisite.
 
+## Recommended plugins
+
+Other Claude Code plugins I run alongside `claude-skills`. (`code-simplifier` isn't here — it's already a required dependency and installs automatically.)
+
+Most live in Claude Code's built-in **`claude-plugins-official`** marketplace, so one command installs each:
+
+```
+/plugin install code-review@claude-plugins-official
+/plugin install context7@claude-plugins-official
+/plugin install feature-dev@claude-plugins-official
+/plugin install frontend-design@claude-plugins-official
+/plugin install pr-review-toolkit@claude-plugins-official
+/plugin install gopls-lsp@claude-plugins-official
+/plugin install pyright-lsp@claude-plugins-official
+/plugin install typescript-lsp@claude-plugins-official
+```
+
+| Plugin | What it does |
+|---|---|
+| `code-review` | Automated PR review with multiple agents + confidence scoring |
+| `context7` | MCP server for up-to-date, version-specific library docs |
+| `feature-dev` | Feature-dev workflow — explore, design, and review agents |
+| `frontend-design` | Distinctive, production-grade frontend UI generation |
+| `pr-review-toolkit` | PR-review agents — comments, tests, error handling, type design, quality |
+| `gopls-lsp` | Go language server (code intelligence, refactoring) |
+| `pyright-lsp` | Python language server (Pyright) — type checking |
+| `typescript-lsp` | TypeScript/JavaScript language server |
+
+**`codex`** lives in a separate marketplace — add it first, then install:
+
+```
+/plugin marketplace add openai/codex-plugin-cc
+/plugin install codex@openai-codex
+```
+
+Use OpenAI Codex from Claude Code to review code or delegate tasks.
+
 ## Status line (optional, manual setup)
 
 Claude Code does **not** let a plugin auto-install the main status line: `statusLine` in `plugin.json` is ignored at load time, and `${CLAUDE_PLUGIN_ROOT}` isn't expanded in status-line commands. So this repo ships the script and you wire it up once by hand.
