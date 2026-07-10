@@ -7,5 +7,8 @@
     "url": "https://github.com/johnathafelix"
   },
   "homepage": "https://github.com/johnathafelix/claude-skills",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": [
+    { "name": "code-simplifier", "marketplace": "claude-plugins-official" }
+  ]
 }

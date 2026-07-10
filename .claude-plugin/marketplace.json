@@ -6,6 +6,7 @@
     "name": "johnathafelix",
     "url": "https://github.com/johnathafelix"
   },
+  "allowCrossMarketplaceDependenciesOn": ["claude-plugins-official"],
   "plugins": [
     {
       "name": "claude-skills",

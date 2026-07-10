@@ -48,7 +48,7 @@ Then restart Claude Code (or run `/plugin`) and the skills + hooks are active. T
 |---|---|---|
 | `git-commit-guard.js` | PreToolUse (Bash) | Guards risky `git commit` invocations |
 | `gh-pr-guard.js` | PreToolUse (Bash) | Guards risky `gh pr` invocations |
-| `auto-code-simplifier.js` | Stop | After edits, nudges a code-simplifier pass ‡ |
+| `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
 | `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` before finishing |
 | `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` before finishing |
 
@@ -56,8 +56,8 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 
 ## Dependencies & caveats
 
-- **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the private **`code-review-graph` MCP server**. Without it they have nothing to call — install/configure that MCP first, or ignore these four skills.
-- **‡ `auto-code-simplifier.js`** invokes an external `code-simplifier` agent (from `code-simplifier`/`pr-review-toolkit` plugins). Without it, the Stop nudge references an agent that isn't present; it won't error, but the pass won't run.
+- **Required plugin dependency: `code-simplifier`** (from the official `claude-plugins-official` marketplace). The `auto-code-simplifier.js` Stop hook drives its agent, so it's declared as a hard dependency in `plugin.json` and is **auto-installed** when you install `claude-skills`. This needs the `claude-plugins-official` marketplace to be registered — it's Claude Code's built-in official marketplace, so it's present by default; if it isn't, add it once with `claude plugin marketplace add anthropics/claude-plugins-official` (the plugin will tell you if it's missing).
+- **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the private **`code-review-graph` MCP server**. Without it they have nothing to call — install/configure that MCP first, or ignore these four skills. (MCP servers can't be plugin dependencies, so this stays a documented soft prerequisite.)
 
 ## Status line (optional, manual setup)
 
