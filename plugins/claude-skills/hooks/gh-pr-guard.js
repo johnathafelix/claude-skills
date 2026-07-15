@@ -4,11 +4,25 @@
  * title or body, whether created via the draft-pr / update-pr-description skills
  * or by a direct `gh pr create` / `gh pr edit`.
  *
- * Fires only on `gh pr create` / `gh pr edit`. Extracts --title/-t and --body/-b
- * (quoted or heredoc) and denies if any forbidden attribution is present.
- * PR titles are prose, so there is NO conventional-type or lowercase check here.
- * --body-file / editor / unparseable -> allow (never breaks the flow).
+ * Fires only on `gh pr create` / `gh pr edit`. Checks, for forbidden attribution:
+ *   - --title/-t and --body/-b (quoted or heredoc)
+ *   - --body-file/-F: the referenced file's contents are read and checked
+ *   - --body "$(cat FILE)" / "$(< FILE)": the file reference is resolved and read
+ * and denies if any forbidden attribution is present. Relative paths resolve
+ * against the payload cwd. PR titles are prose, so there is NO conventional-type
+ * or lowercase check here.
+ *
+ * Falls back to allow (never breaks the flow) when a body reference can't be
+ * resolved: editor commits, `-F -` (stdin, already consumed for the payload),
+ * a file not yet written when the guard runs (e.g. `printf ... > f.md &&
+ * gh pr create -F f.md` in one command), or any read error. Also not resolved
+ * (contrived vs. the real vector, left open on purpose): a `$(cat FILE)` in
+ * --title (no --title-file exists), variable indirection (`B=$(cat f); --body
+ * "$B"`), and non-cat readers (`$(head f)` etc.).
  */
+
+const fs = require("fs");
+const path = require("path");
 
 const FORBIDDEN = [
   { re: /co-authored-by/i, msg: "remove co-author line" },
@@ -65,6 +79,37 @@ function flagValue(cmd, longName, shortName) {
   return "";
 }
 
+/** Pull the (quoted or bare) file path for --body-file / -F, or "". */
+function fileFlagPath(cmd, longName, shortName) {
+  const flags = `(?:--${longName}|-${shortName})`;
+  const m =
+    cmd.match(new RegExp(`${flags}[ =]\\s*"([^"]+)"`)) ||
+    cmd.match(new RegExp(`${flags}[ =]\\s*'([^']+)'`)) ||
+    cmd.match(new RegExp(`${flags}[ =]\\s*(\\S+)`));
+
+  return m ? m[1] : "";
+}
+
+/** If value is a `$(cat FILE)` / `$(< FILE)` substitution, return FILE, else "". */
+function substFilePath(value) {
+  const m = value.match(/\$\(\s*(?:cat\s+|<\s*)([^)]+?)\s*\)/);
+
+  return m ? m[1] : "";
+}
+
+/** Read a body-reference file (resolved against cwd), or "" if unreadable/stdin. */
+function readBodyFile(cwd, p) {
+  const clean = p.replace(/^['"]|['"]$/g, "");
+  if (clean === "" || clean === "-") return "";
+
+  const resolved = path.isAbsolute(clean) ? clean : path.resolve(cwd || ".", clean);
+  try {
+    return fs.readFileSync(resolved, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 function main() {
   let payload;
   try {
@@ -76,7 +121,17 @@ function main() {
   const cmd = payload?.tool_input?.command;
   if (typeof cmd !== "string" || !/\bgh\s+pr\s+(create|edit)\b/.test(cmd)) return allow();
 
-  const text = [flagValue(cmd, "title", "t"), flagValue(cmd, "body", "b")].join("\n");
+  const cwd = payload?.cwd;
+  const body = flagValue(cmd, "body", "b");
+  const sources = [flagValue(cmd, "title", "t"), body];
+
+  const bodyFile = fileFlagPath(cmd, "body-file", "F");
+  if (bodyFile) sources.push(readBodyFile(cwd, bodyFile));
+
+  const bodySubst = substFilePath(body);
+  if (bodySubst) sources.push(readBodyFile(cwd, bodySubst));
+
+  const text = sources.join("\n");
   if (text.trim() === "") return allow();
 
   const reasons = FORBIDDEN.filter(({ re }) => re.test(text)).map(({ msg }) => msg);
