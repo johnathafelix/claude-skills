@@ -40,12 +40,16 @@ function main() {
   }
 
   const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+  // OS temp trees (incl. Claude's session scratchpad) hold throwaway helpers, not source.
+  const isTemp = p => ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/']
+    .some(t => p.startsWith(t));
   // Mirror /ts-check's default scope: hand-written .ts/.tsx (tests INCLUDED).
   const skip = p =>
     (!p.endsWith('.ts') && !p.endsWith('.tsx')) || // TypeScript source only
     p.endsWith('.d.ts') ||                          // declaration files (type-only/generated)
     p.includes('/node_modules/') ||                 // deps
     p.includes('/.claude/') ||                      // claude infra/hooks/skills
+    isTemp(p) ||                                    // scratchpad/temp files
     /\.gen\.tsx?$/.test(p);                          // generated
 
   const changed = new Set();

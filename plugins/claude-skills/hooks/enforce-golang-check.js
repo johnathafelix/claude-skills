@@ -40,12 +40,16 @@ function main() {
   }
 
   const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+  // OS temp trees (incl. Claude's session scratchpad) hold throwaway helpers, not source.
+  const isTemp = p => ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/']
+    .some(t => p.startsWith(t));
   // Mirror /golang-check's default scope: real, hand-written .go only.
   const skip = p =>
     !p.endsWith('.go') ||          // Go source only
     p.endsWith('_test.go') ||      // test files excluded from default scope
     p.includes('/vendor/') ||      // vendored deps
     p.includes('/.claude/') ||     // claude infra/hooks/skills
+    isTemp(p) ||                   // scratchpad/temp files
     /\.pb\.go$/.test(p) ||         // protobuf generated
     /_gen\.go$/.test(p) ||         // generated
     /\.gen\.go$/.test(p);          // generated

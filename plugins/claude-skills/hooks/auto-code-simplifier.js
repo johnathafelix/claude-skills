@@ -49,6 +49,9 @@ function main() {
     '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout',
     '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile'
   ]);
+  // OS temp trees (incl. Claude's session scratchpad) hold throwaway helpers, not source.
+  const TMP_PREFIXES = ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/'];
+  const isTemp = p => TMP_PREFIXES.some(t => p.startsWith(t));
   const ext = p => { const i = p.lastIndexOf('.'); return i < 0 ? '' : p.slice(i).toLowerCase(); };
   const base = p => p.slice(p.lastIndexOf('/') + 1);
 
@@ -61,6 +64,7 @@ function main() {
       const fp = (b.input && (b.input.file_path || b.input.notebook_path)) || '';
       if (!fp) continue;
       if (fp.includes('/.claude/')) continue;  // claude infra/plans/hooks
+      if (isTemp(fp)) continue;  // scratchpad/temp files
       if (SKIP_BASENAME.has(base(fp))) continue;  // shell rc/profile
       if (SKIP_EXT.has(ext(fp))) continue;   // docs/config only
       codeEdited = true;
