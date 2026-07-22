@@ -4,8 +4,8 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **15 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, and writing cleanup.
-- **1 agent** — `go-idiom-checker`, the restricted sub-agent the `golang-check` skill fans out to.
+- **16 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, and end-to-end task implementation.
+- **5 agents** — `go-idiom-checker` (the restricted sub-agent `golang-check` fans out to) plus the `plan-and-implement-task` team: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
 ## Setup
@@ -81,6 +81,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `merge` | Merge the PR base into your branch, resolve conflicts, verify, push |
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
+| `plan-and-implement-task` | Implement one task end to end: user-approved plan (plan mode), then orchestrated implementation via a fable/opus/sonnet agent team |
 | `tdd` | Test-driven development (red-green-refactor) |
 | `write-pending-unit-tests` | Write tests for files changed vs. the base branch |
 | `golang-check` | Check Go code against Go conventions (fans out per-guideline) |
