@@ -81,7 +81,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `merge` | Merge the PR base into your branch, resolve conflicts, verify, push |
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
-| `plan-and-implement-task` | Implement one task end to end: user-approved plan (plan mode), then orchestrated implementation via a fable/opus/sonnet agent team |
+| `plan-and-implement-task` | Implement one task end to end: user-approved plan (plan mode), wave-scheduled implementation by a fable/opus/sonnet agent team, final lead code review |
 | `tdd` | Test-driven development (red-green-refactor) |
 | `write-pending-unit-tests` | Write tests for files changed vs. the base branch |
 | `golang-check` | Check Go code against Go conventions (fans out per-guideline) |
