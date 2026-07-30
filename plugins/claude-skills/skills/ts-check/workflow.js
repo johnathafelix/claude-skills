@@ -104,6 +104,16 @@ function normAnchor(v) {
     .toLowerCase()
 }
 
+// [SHARED-CORE] Single-quote a path for the shell. Plugin paths derive from
+// $HOME, so both a space (/Users/John Smith/...) and an apostrophe
+// (/Users/O'Brien/...) are real. Unquoted, `wc -l` treats a spaced path as two
+// operands and its count can NEVER match — and because every guideline shares
+// the same prefix, all of them fail identically, with the only diagnostic
+// pointing at agent derailment rather than the quoting.
+function shQuote(p) {
+  return `'${String(p).split("'").join(`'\\''`)}'`
+}
+
 // [SHARED-CORE] Returns a clean guideline, or a string explaining why it is
 // unusable. NEVER throws: one malformed entry must cost one guideline, not the
 // whole run. prompt() used to reach straight into g.stem/g.path, so a missing
@@ -157,7 +167,7 @@ Rules:
 - \`line\` is the 1-based line number in the target file as it exists now. \`suggestedFix\` must quote enough surrounding code (before -> after) that the edit can be located without relying on the line number.
 
 Proof-of-read (required — do not skip this):
-Run \`wc -l ${g.path}\` via Bash and report the integer from its stdout as guidelineLineCount.
+Run \`wc -l ${shQuote(g.path)}\` via Bash and report the integer from its stdout as guidelineLineCount.
 Do NOT count lines yourself by reading the file — run the command and report exactly the number it prints (not the filename, not the padding).`
 }
 
