@@ -100,9 +100,11 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `git-commit-guard.js` | PreToolUse (Bash) | Guards risky `git commit` invocations |
 | `gh-pr-guard.js` | PreToolUse (Bash) | Guards risky `gh pr` invocations |
 | `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
-| `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` before finishing |
-| `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` before finishing |
+| `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` to actually **report** before finishing |
+| `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` to actually **report** before finishing |
 | `format-with-prettier.js` | Stop | Formats changed files with `prettier --write`, last in the turn (only in projects with a prettier config) |
+
+The two `enforce-*` hooks share their state machine in `hooks/lib/enforce-check.js`; each hook file is just a config block. They check for a terminal task notification representing a real pass, not merely that the skill was dispatched — the checks run asynchronously, so a task ID alone would let the findings vanish. Each hook blocks at most 3 times per turn, and never blocks while a run is still in flight.
 
 The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files; `format-with-prettier.js` also no-ops in projects that haven't opted into prettier.
 
@@ -110,6 +112,24 @@ The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, 
 
 - **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
 - **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the **`code-review-graph` MCP server** (a public PyPI package). See [Setup → graph skills](#3-optional-graph-skills-code-review-graph) to install it; MCP servers can't be plugin dependencies, so this stays a documented prerequisite.
+
+## Developing this plugin
+
+**Repo edits to `agents/`, `hooks/`, and `skills/` are INERT until you commit, push, and `/plugin update`.** Claude Code loads the plugin from a SHA-pinned cache at `~/.claude/plugins/cache/claude-skills/claude-skills/<sha>/`, not from your working tree. Editing a file here changes nothing in the running session.
+
+This is not hypothetical. A live `ts-check` run once finished with `agents_error: 4` because it ran **84 seconds before** the commit that added `agents/ts-quality-checker.md` — the agent type did not exist in the loaded plugin, so every agent failed to resolve. Its sibling `golang-check` test looked green only because `go-idiom-checker.md` happened to be cached already from an earlier commit, so the newly-added-agent path was never exercised at all.
+
+### Live-test procedure
+
+Do all five, in order:
+
+1. **Confirm the cache is behind before you start.** Compare `ls -t ~/.claude/plugins/cache/claude-skills/claude-skills/` against `git rev-parse --short=12 HEAD`. If they differ, nothing you just edited is loaded.
+2. **Commit and push.** This plugin sets no `version`, so it is tracked by commit — every push is a release.
+3. **Refresh and reload:** `/plugin marketplace update claude-skills`, then `/plugin update claude-skills@claude-skills`, then `/reload-plugins`.
+4. **Re-verify.** The newest cache directory should now match `HEAD`, and every file you changed should be present under it — in particular new files in `agents/` and each `skills/*/workflow.js`, which the cache does not synthesize.
+5. **Read the `<usage>` block of the task notification, not just `<status>`.** `<status>completed</status>` coexists with total failure: it means the workflow script returned, not that the work succeeded, and `agent_count` counts spawn attempts rather than successes. A run is a real pass only when `agents_error` is `0`, `agents_done` equals `agent_count`, and `unverified` is empty. `agents_error == agent_count` with `tool_uses: 0` means the agent type did not resolve — go back to step 1.
+
+`npm test` covers the Stop hooks only (zero dependencies, `node --test`). Hook changes are subject to the same cache rule, so a passing suite is necessary but not sufficient — a hook edit still needs steps 2–4 before it runs live.
 
 ## Recommended plugins
 
