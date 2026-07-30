@@ -382,12 +382,21 @@ for (let i = 0; i < guidelines.length; i++) {
 
       if (!Number.isFinite(line) || !file) repaired++
 
-      // Coercing file/line here also keeps the comparators below from ever
-      // seeing NaN, which would make the sort order undefined.
+      // `rule` comes from OUR validated stem, never the agent's. The prompt asks
+      // for g.stem and the schema marks it required, but harness enforcement of
+      // `required` is UNVERIFIED — and the sort below is rule-major, so an agent
+      // returning "type design" would scatter its findings into a phantom group
+      // while the real type-design guideline looked clean. A missing `rule` is
+      // worse still: it makes that comparator inconsistent (both
+      // `undefined < 'naming'` and `'naming' < undefined` are false, so it
+      // returns 1 in both directions), which is undefined sort behavior.
+      //
+      // Coercing file/line here also keeps the comparators from ever seeing NaN.
       local.push({
         ...f,
         file: file || '(file not reported)',
         line: Number.isFinite(line) ? line : 0,
+        rule: ok.g.stem,
       })
     }
 
@@ -405,6 +414,11 @@ for (let i = 0; i < guidelines.length; i++) {
 // [SKILL-POLICY] rule -> file -> line, matching SKILL.md Step 4's
 // group-by-guideline presentation. ts-check deliberately sorts
 // file -> line -> priority instead; do NOT unify them.
+//
+// This is only safe because `rule` is stamped from the validated stem in
+// aggregation above. If that stamp is ever removed, this comparator goes back to
+// grouping by whatever string the agent chose — and can become inconsistent on a
+// missing value. The stamp and this sort are a pair.
 findings.sort((a, b) => {
   if (a.rule !== b.rule) return a.rule < b.rule ? -1 : 1
   if (a.file !== b.file) return a.file < b.file ? -1 : 1

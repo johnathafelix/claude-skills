@@ -290,7 +290,12 @@ function plural(n, word) {
 // shape of both real failures this enforcement exists to catch: agents that
 // never resolved, and a proof-of-read gate that rejected every guideline.
 function healthOf(n) {
-  if (!n) return null;
+  // Unreachable today: the WAITING branch calls notify(), which exits, so this
+  // never sees null. Kept because every other error path in this file degrades
+  // rather than throws — but it must return the same shape as every other
+  // branch, since the caller reads `.ok` directly and a null here would crash a
+  // process whose whole job is to never crash.
+  if (!n) return { ok: false, why: 'no task notification could be parsed' };
 
   if (n.status !== 'completed') return { ok: false, why: 'the run ended with status "' + n.status + '"' };
 
