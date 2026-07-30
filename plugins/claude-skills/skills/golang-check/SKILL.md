@@ -1,13 +1,15 @@
 ---
 name: golang-check
-description: USE WHEN reviewing, writing, or refactoring Go code and you want it checked against Go conventions — naming, type/API design (incl. accept interfaces/return structs), functions & signatures, declarations, errors, concurrency, gotchas, modernizers (Go 1.26+ new(expr) & other go fix rewrites), testing, structure, and doc comments. Fans out one focused sub-agent per guideline (in parallel) and reports violations with file:line and fixes. Extend by dropping a new file into guidelines/.
+description: USE WHEN reviewing, writing, or refactoring Go code and you want it checked against Go conventions — naming, type/API design (incl. accept interfaces/return structs), functions & signatures, declarations, errors, concurrency, gotchas, modernizers (Go 1.26+ new(expr) & other go fix rewrites), testing, structure, and doc comments. Dispatches one focused agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable) and reports violations with file:line and fixes. Extend by dropping a new file into guidelines/.
 ---
 
 # Go Idiom Check — Orchestrator
 
-Check changed Go code against the project's Go design guidelines. Each guideline lives in its own file under `guidelines/` and is checked by its own sub-agent, so the set of checks grows by adding files — not by editing this orchestrator.
+Check changed Go code against the project's Go design guidelines. Each guideline lives in its own file under `guidelines/` and is checked by its own agent, so the set of checks grows by adding files — not by editing this orchestrator.
 
 **This skill reports; it does not edit by default.** Surface findings and let the user decide. Only apply fixes if the user explicitly asks (changing a return type or parameter type can ripple into callers).
+
+**This skill dispatches its check via the `Workflow` tool.** Invoking `/golang-check` is your instruction to call it — no separate confirmation needed. **Dispatching is not the same as finishing:** `Workflow` returns a task ID immediately and the run completes in the background. Do not conclude the turn on that task ID — wait for the completion notification and present its `findings` / `unverified` before you stop, especially if this run was triggered by the `enforce-golang-check.js` Stop hook (it only blocks once per turn, so nothing else will catch a premature stop).
 
 ## Procedure
 
@@ -25,62 +27,57 @@ Filter the result to `*.go` files and **exclude**: `vendor/`, generated files (`
 
 If the filtered list is empty, report that there is nothing to check and stop.
 
-### Step 2 — Load guidelines
+### Step 2 — Discover guidelines (do not read them)
 
-List every `*.md` in the `guidelines/` directory that sits **alongside this SKILL.md** and Read each one. Resolve that directory to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`); you will need that absolute path again in Step 3 to pass each guideline file to its sub-agent. Each file is a self-contained rule spec — a cohesive group of closely-related checks (e.g. `errors.md`, `concurrency.md`, `type-design.md`) — and its full text is handed to one sub-agent in Step 3. The set is discovered dynamically: drop in a new `.md` and it becomes another parallel sub-agent with no change here.
+List every `*.md` in the `guidelines/` directory that sits **alongside this SKILL.md**. Resolve that directory to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`). You will pass these absolute paths through to the check in Step 3.
 
-Extended examples for each guideline live in the `references/` directory alongside this SKILL.md; sub-agents consult them only for ambiguous cases.
+Unlike the old batched fan-out, **do not `Read` the guideline bodies here** — the orchestrator only needs filenames and two cheap facts per guideline, both obtainable without opening any file individually. Get both with **one glob-based command each**, not a per-file loop:
 
-Skip a guideline only when it cannot apply to the scope (e.g. `testing.md` when no `*_test.go` files are in scope, `doc-comments.md`/`testing.md` if the user asked to exclude them).
+1. **Line count**, via `wc -l guidelines/*.md`. This prints one line per file plus a trailing `total` line — **ignore the `total` line**, it is not a guideline. Each per-file count becomes that guideline's `lines` value, used later as a proof-of-read check on the agent that applies it — pass the same absolute path to that agent so both sides run the identical command against the identical file.
+2. **Version gate**, via `head -1 guidelines/*.md`, which prints an `==> path <==` header before each file's first line in one call. A guideline may declare a minimum Go version with an HTML-comment marker on that first line, e.g. `<!-- requires-go-version: 1.26 -->`; most guidelines' first line is just their `# Guideline: …` heading, which has no marker and gates nothing. Read the module's Go version from the `go` directive of the nearest `go.mod` (walk up from the in-scope files). **Skip the guideline entirely — do not include it below — when the module version is lower than required, or no `go.mod` declares a version.** For example, `modernizers.md` requires `1.26`; on a `go 1.25` module it is skipped. Note any version-skip in the Step 4 report so the user knows why it was omitted.
 
-**Version-gated guidelines:** a guideline may declare a minimum Go version with an HTML-comment marker on its first line, e.g. `<!-- requires-go-version: 1.26 -->`. Before launching such a guideline, read the module's Go version from the `go` directive of the nearest `go.mod` (walk up from the in-scope files; with multiple modules, judge each file against its own module). **Skip the guideline — do not spawn its sub-agent — when the module version is lower than required, or no `go.mod` declares a version.** For example, `modernizers.md` requires `1.26` (its checks rewrite code to Go 1.26 features like `new(expr)`); on a `go 1.25` module it is skipped entirely. Note any version-skip in the Step 4 report so the user knows why it was omitted.
+Skip a guideline only when it cannot apply to the scope (e.g. `testing.md` when no `*_test.go` files are in scope, or the user asked to exclude it).
 
-### Step 3 — Launch sub-agents (batched, one guideline each)
+**Files are scoped per guideline, not shared as one flat list.** With multiple Go modules, judge each file against its own module's `go.mod` — a guideline like `modernizers.md` should see only the files from modules that meet its version gate, not the whole changed-file set. For most guidelines with a single module, this is just the full Step 1 list.
 
-Dispatch each guideline to its own sub-agent with `subagent_type: claude-skills:go-idiom-checker` — a read-only, restricted-tool agent whose minimal injected context makes it far less likely to derail than `general-purpose` (see the reliability note in Step 4).
+Build the list you'll pass to the check:
 
-**Concurrency: launch at most 4 sub-agents at a time, awaiting each batch before starting the next.** Large fan-outs (10+ at once) measurably raise the rate at which a sub-agent ignores its prompt and returns hallucinated boilerplate with 0 tool calls instead of findings; small batches sharply reduce it.
-
-Each sub-agent's prompt must:
-
-1. Name its guideline file by **absolute path** and instruct it to Read the file IN FULL — pass the path, not a summary or paraphrase. (A guideline may cite an extended-examples file as `../references/<name>.md`; that path is relative to the guideline file, so resolve it against the absolute guideline path you passed.)
-2. Give the in-scope file list from Step 1 plus a one-line note of what changed (focus the check on the changed lines).
-3. Apply **only** that one guideline; read-only, never edit; report only findings it is confident about (prefer silence over a shaky flag).
-4. **End the prompt with the output contract** (put it last, for recency): the entire final message must be a single JSON array — `[]` if nothing is found, otherwise objects shaped as below, with nothing before or after.
-
-```json
-{
-  "file": "relative/path.go",
-  "line": 42,
-  "symbol": "NewStore",
-  "rule": "<guideline filename stem, e.g. type-design>",
-  "severity": "error | warning | info",
-  "confidence": "high | medium",
-  "description": "what is wrong, specifically",
-  "suggestedFix": "concrete fix, ideally as before -> after"
-}
+```
+guidelines = [
+  { stem: "naming", path: "/abs/.../guidelines/naming.md", lines: 24, files: [...] },
+  ...
+]
 ```
 
-Severity: `error` for correctness bugs (data races, leaks, typed-nil, slice aliasing), `warning` for idiom/convention violations, `info` for low-confidence or stylistic suggestions. Pass each sub-agent its guideline's filename stem to use as `rule`.
+### Step 3 — Run the check
 
-One guideline per sub-agent keeps each context focused. With more guidelines than the batch cap of 4, run successive batches until all are dispatched.
+**Primary path — `Workflow`:**
 
-### Step 4 — Validate, retry, merge, present
+```
+Workflow({
+  scriptPath: "<absolute dir from Step 2>/workflow.js",
+  args: { guidelines, changeNote: "<one-line note of what changed>" },
+})
+```
 
-**4a. Validate each result; retry derailments.** A healthy checker always Reads its guideline (≥1 tool call) and returns a JSON array. Treat a result as **derailed — NOT a clean pass** — when either:
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:go-idiom-checker` agent, capped at 4 concurrent (empirically necessary — see the comment in `workflow.js` for why), retries a guideline twice on a failed proof-of-read, and returns `{ findings, unverified }` already sorted.
 
-- its output does not parse as a JSON array (prose, an apology, a fragment of instructions, "I don't have a task", an empty/near-empty message), **or**
-- it made **0 tool calls** (it never opened its guideline or the target files).
+**Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
-Re-dispatch each derailed guideline (Step 3), alone or in a small batch. If it still derails after 2 retries, report that guideline as **UNVERIFIED** in the final output. **Never accept a non-JSON or 0-tool-call response as `[]`** — a derailed check is a coverage gap, not a clean bill of health.
+Dispatch each guideline to its own `claude-skills:go-idiom-checker` agent, **at most 4 at a time, awaiting each batch before the next** (larger batches measurably raise the rate of derailed, hallucinated 0-tool-call responses). Each prompt must name its guideline by absolute path (Read it IN FULL — the fallback agent does need to open it here, since there is no script to hand it a pre-resolved path list), give the in-scope files for that guideline, apply only that one guideline, and end with this output contract as the entire final message — nothing before or after:
 
-**4b. Merge and present.**
+```json
+{"file":"relative/path.go","line":42,"symbol":"NewStore","rule":"<guideline stem>","severity":"error|warning|info","confidence":"high|medium","description":"what is wrong, specifically","suggestedFix":"before -> after"}
+```
 
-1. Collect every *validated* sub-agent's findings into one list.
-2. Present a numbered checklist of `file:line — symbol — description` with severity/confidence, grouped by guideline and sorted by file then line within each group.
-3. If every validated sub-agent returned empty, report the code is clean against the current guidelines. Always list any **UNVERIFIED** (retry-exhausted) or version-skipped guidelines so coverage gaps are explicit.
+A single JSON array, `[]` if nothing found. Treat a result as **derailed — not a clean pass** — if it doesn't parse as a JSON array or the agent made 0 tool calls; re-dispatch derailed guidelines, and after 2 retries still derailing, report that guideline as **UNVERIFIED**.
 
-> **Reliability note.** Sub-agents receive large injected context attachments (a deferred-tool list + the skill catalog, ~36 KB for `general-purpose`). Under high fan-out this occasionally makes a sub-agent ignore its task prompt and emit hallucinated system-prompt-like text with 0 tool calls instead of findings. Two mitigations, layered: (1) `subagent_type: claude-skills:go-idiom-checker` restricts the toolset so those attachments shrink, and small batches (Step 3) lower the trigger rate; (2) the derailment detector + retry (4a) catches whatever still slips through, so a derailed check is never silently counted as clean.
+### Step 4 — Present results
+
+1. Collect all `findings`, grouped by guideline (`rule`) and sorted by file then line within each group — the `Workflow` path returns this pre-sorted; for the fallback path, do the same sort yourself.
+2. Present a numbered checklist of `file:line — symbol — description` with severity/confidence.
+3. If there are no findings, report the code is clean against the current guidelines.
+4. Always list any **UNVERIFIED** guidelines (from `unverified`, or from fallback retries) and any **version-skipped** guidelines from Step 2, so coverage gaps are explicit rather than silently read as a clean pass.
 
 ### Step 5 — Fixes (only when asked)
 

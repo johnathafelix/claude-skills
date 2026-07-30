@@ -76,7 +76,9 @@ function main() {
       '). Before finishing, run the /golang-check skill on the changed Go ' +
       'file' + (n === 1 ? '' : 's') + ' to check them against the Go conventions ' +
       '(it fans out one focused sub-agent per guideline and reports violations). ' +
-      'Address or report its findings, then stop. (Runs once per turn.)'
+      'Dispatching a check is not enough — this only blocks once per turn, so wait ' +
+      'for its findings (or UNVERIFIED guidelines) and address or report them ' +
+      'before finishing.'
   }));
   process.exit(0);
 }
