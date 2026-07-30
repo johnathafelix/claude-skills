@@ -4,6 +4,22 @@ export const meta = {
   phases: [{ title: 'Check', detail: 'one read-only agent per guideline, capped at 4 concurrent' }],
 }
 
+// ── MIRROR NOTICE ────────────────────────────────────────────────────────────
+// Sibling: ../golang-check/workflow.js. These are deliberate near-duplicates,
+// NOT extracted into a shared module: the Workflow runtime's support for relative
+// `import` from scriptPath is UNVERIFIED, and a failed import is a runtime throw
+// inside a background task — it would take out the primary path of both skills
+// at once, discovered late.
+//
+// Blocks tagged [SHARED-CORE] must stay identical with the sibling — a change
+// here MUST be mirrored there. Blocks tagged [SKILL-POLICY] are intentional
+// divergences; do NOT "unify" them:
+//   - sort comparator: ts file->line->priority; golang rule->file->line
+//   - files: ts shares one args.files; golang scopes per guideline (g.files)
+//   - severity/confidence: golang only — this schema has no such fields
+//   - PRIORITY constant: ts only; golang has no priority ranking
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Empirically derived in golang-check (see golang-check/SKILL.md): fanning out
 // all guidelines at once produced malformed sub-agent responses, some
 // misreported as prompt injection. Capping at 4 concurrent fixed it. ts-check
@@ -15,6 +31,27 @@ export const meta = {
 const CONCURRENCY = 4
 
 const RETRIES = 2
+
+// [SKILL-POLICY] Priority comes from THIS list, keyed by stem — never from the
+// caller's array order. The only source of the `lines` values is
+// `wc -l '$G/'*.md`, which emits ALPHABETICAL order, nearly the inverse of the
+// real priority. Trusting the incoming order silently inverts Step 5's
+// fix-conflict resolution and can apply a cosmetic inline over a conflicting
+// strong-types fix on the same line.
+//
+// Adding a 5th guideline touches this list AND ts-check/SKILL.md Step 2's drift
+// check. golang-check deliberately has no priority ranking.
+const PRIORITY = ['strong-types', 'no-magic-values', 'data-over-logic', 'redundant-variable-inline']
+
+function priorityOf(stem) {
+  const i = PRIORITY.indexOf(stem)
+
+  if (i >= 0) return i + 1
+
+  log(`${stem}: not in the known priority list — ranked last (${PRIORITY.length + 1}); see ts-check/SKILL.md Step 2 drift check`)
+
+  return PRIORITY.length + 1
+}
 
 const FINDINGS_SCHEMA = {
   type: 'object',
@@ -42,6 +79,65 @@ const FINDINGS_SCHEMA = {
   },
 }
 
+// [SHARED-CORE] A label for a guideline we could not normalize, so every log
+// line and every `unverified` entry names something the caller can act on.
+function stemOf(raw, i) {
+  return raw && typeof raw.stem === 'string' && raw.stem.trim() ? raw.stem.trim() : `guidelines[${i}]`
+}
+
+// [SHARED-CORE] Tolerant, not loose. Strips CR, folds the handful of non-ASCII
+// characters that actually occur in guideline anchor lines, collapses whitespace
+// runs, trims, case-folds. Every word survives, so two different guideline lines
+// cannot normalize to the same string. Do NOT extend this into something that
+// discards words — the anchors it compares are the proof that a body was read.
+function normAnchor(v) {
+  if (typeof v !== 'string') return ''
+
+  return v
+    .replace(/\r/g, '')
+    .replace(/[–—―]/g, '-')
+    .replace(/→/g, '->')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+// [SHARED-CORE] Returns a clean guideline, or a string explaining why it is
+// unusable. NEVER throws: one malformed entry must cost one guideline, not the
+// whole run. prompt() used to reach straight into g.stem/g.path, so a missing
+// field threw inside pool()'s silent catch and that guideline was reported
+// UNVERIFIED with no diagnostic anywhere.
+function normalizeGuideline(raw, i) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return `guidelines[${i}] is not an object`
+
+  const stem = typeof raw.stem === 'string' ? raw.stem.trim() : ''
+  if (!stem) return `guidelines[${i}] has no usable stem`
+
+  const path = typeof raw.path === 'string' ? raw.path.trim() : ''
+  if (!path) return `${stem}: no usable path`
+
+  // Coerced, not compared with ===: a string "945" from a JSON-string args
+  // payload could never match the agent's integer, costing 3 agent calls and a
+  // false UNVERIFIED for every guideline.
+  const lines = Number(raw.lines)
+  if (!Number.isInteger(lines) || lines <= 0) {
+    return `${stem}: lines is not a positive integer (got ${JSON.stringify(raw.lines)})`
+  }
+
+  // Body anchors for the proof-of-read. Absent ones are tolerated so a Step 2
+  // that predates them still runs — but NEVER silently: without these warnings a
+  // Step 2 regression would quietly revert the gate to line-count-only forever.
+  const title = normAnchor(raw.title)
+  const lastLine = normAnchor(raw.lastLine)
+
+  if (!title) log(`${stem}: WARNING — no "title" anchor supplied; proof-of-read leg 2 DISABLED (see SKILL.md Step 2)`)
+  if (!lastLine) log(`${stem}: WARNING — no "lastLine" anchor supplied; proof-of-read leg 3 DISABLED (see SKILL.md Step 2)`)
+
+  return { stem, path, lines, title, lastLine }
+}
+
 function prompt(g, files, changeNote) {
   return `Apply exactly ONE TypeScript quality guideline to the files listed below. Nothing else.
 
@@ -65,18 +161,52 @@ Run \`wc -l ${g.path}\` via Bash and report the integer from its stdout as guide
 Do NOT count lines yourself by reading the file — run the command and report exactly the number it prints (not the filename, not the padding).`
 }
 
-async function check(g, files, changeNote) {
-  for (let attempt = 0; attempt <= RETRIES; attempt++) {
-    const r = await agent(prompt(g, files, changeNote), {
-      label: `check:${g.stem}${attempt ? `:retry${attempt}` : ''}`,
-      phase: 'Check',
-      schema: FINDINGS_SCHEMA,
-      agentType: 'claude-skills:ts-quality-checker',
-    })
+// [SHARED-CORE]
+async function check(raw, i, files, changeNote) {
+  const g = normalizeGuideline(raw, i)
 
-    if (r && r.guidelineLineCount === g.lines) return r
+  if (typeof g === 'string') {
+    log(`UNVERIFIED (bad args): ${g}`)
 
-    log(`${g.stem}: proof-of-read mismatch on attempt ${attempt + 1}/${RETRIES + 1}`)
+    return null
+  }
+
+  for (let attempt = 1; attempt <= RETRIES + 1; attempt++) {
+    let r
+
+    // try/catch INSIDE the loop. pool()'s catch sits outside it, so a thrown
+    // error used to skip the remaining attempts entirely — a guideline got 0
+    // retries instead of the documented 3.
+    try {
+      r = await agent(prompt(g, files, changeNote), {
+        label: `check:${g.stem}${attempt > 1 ? `:retry${attempt - 1}` : ''}`,
+        phase: 'Check',
+        schema: FINDINGS_SCHEMA,
+        agentType: 'claude-skills:ts-quality-checker',
+      })
+    } catch (e) {
+      log(`${g.stem}: agent call threw on attempt ${attempt}/${RETRIES + 1} — ${(e && e.message) || e}`)
+
+      continue
+    }
+
+    // Per the Workflow contract, null means user-skip or a terminal API error
+    // the harness already retried. Re-dispatching re-prompts the user and cannot
+    // fix an API error, so stop here — and do not call it a proof-of-read
+    // mismatch, which sends debugging at the wrong thing.
+    if (r === null || r === undefined) {
+      log(`${g.stem}: UNVERIFIED — agent returned no result (user skip or terminal API error); not retrying`)
+
+      return null
+    }
+
+    if (r.guidelineLineCount === g.lines && Array.isArray(r.findings)) return { g, r }
+
+    const why = Array.isArray(r.findings)
+      ? `line count ${JSON.stringify(r.guidelineLineCount)} != expected ${g.lines}`
+      : 'findings is absent or not an array'
+
+    log(`${g.stem}: proof-of-read failed on attempt ${attempt}/${RETRIES + 1} — ${why}`)
   }
 
   log(`${g.stem}: UNVERIFIED after ${RETRIES + 1} attempts`)
@@ -84,6 +214,7 @@ async function check(g, files, changeNote) {
   return null
 }
 
+// [SHARED-CORE]
 // Worker pool, not chunked parallel() batches: a fixed number of lanes each pull
 // the next guideline as they free up, so a slow guideline never blocks an idle
 // lane the way a chunk-of-4 barrier would. Retries run inside a lane, so
@@ -97,9 +228,13 @@ async function pool(items, worker) {
       const i = next++
 
       try {
-        results[i] = await worker(items[i])
-      } catch {
+        results[i] = await worker(items[i], i)
+      } catch (e) {
+        // Last-resort net only — check() retries its own throws now. Never
+        // silent: a swallowed error here is an invisible coverage gap that looks
+        // identical to a derailed agent.
         results[i] = null
+        log(`${stemOf(items[i], i)}: worker threw outside the retry loop — ${(e && e.message) || e}`)
       }
     }
   }
@@ -111,11 +246,31 @@ async function pool(items, worker) {
 
 phase('Check')
 
-// Some callers/harnesses deliver `args` JSON-encoded as a string instead of the
-// documented object (verified empirically during the golang-check build: the
-// same object literal, passed the documented way, still arrived here as a
-// string). Parse defensively rather than trust the caller.
-const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args
+// [SHARED-CORE] Some callers/harnesses deliver `args` JSON-encoded as a string
+// instead of the documented object (verified empirically during the golang-check
+// build: the same object literal, passed the documented way, still arrived here
+// as a string). Parse defensively rather than trust the caller.
+let parsedArgs
+
+if (typeof args === 'string') {
+  try {
+    parsedArgs = JSON.parse(args)
+  } catch (e) {
+    throw new Error(
+      `ts-check workflow could not parse its args string as JSON — ${(e && e.message) || e}; ` +
+        `first 200 chars: ${args.slice(0, 200)}`,
+    )
+  }
+} else {
+  parsedArgs = args
+}
+
+if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) {
+  throw new Error(
+    `ts-check workflow received args of type ${Array.isArray(parsedArgs) ? 'array' : typeof parsedArgs} — ` +
+      'expected an object with { guidelines, files, changeNote }',
+  )
+}
 
 // An empty/missing guidelines or files list is never legitimate here —
 // SKILL.md Step 1 already stops on an empty scope, and the guideline list is a
@@ -132,36 +287,92 @@ if (!Array.isArray(files) || files.length === 0) {
   throw new Error('ts-check workflow received no target files — verify the Step 2 args payload')
 }
 
-const changeNote = parsedArgs.changeNote
+const changeNote = typeof parsedArgs.changeNote === 'string' ? parsedArgs.changeNote : ''
 
-const results = await pool(guidelines, g => check(g, files, changeNote))
+// [SKILL-POLICY] A mis-ordered payload can no longer invert the ranking, but say
+// so rather than fixing it silently — the fallback path still assigns priority by
+// hand from SKILL.md's list, so a disagreement here means the two paths would
+// disagree.
+const callerRanked = guidelines.map((g, i) => stemOf(g, i)).filter(s => PRIORITY.indexOf(s) >= 0)
+const canonical = PRIORITY.filter(s => callerRanked.indexOf(s) >= 0)
+
+if (callerRanked.join('|') !== canonical.join('|')) {
+  log(
+    `args guideline order [${callerRanked.join(' > ')}] disagrees with the canonical priority ` +
+      `[${canonical.join(' > ')}] — using the canonical order; check SKILL.md Step 2`,
+  )
+}
+
+// Every raw entry goes into the pool, including unusable ones. Filtering first
+// would shift indices out of step with `results` and mispair findings with the
+// wrong guideline — worse than the bug being fixed. check() returns null for
+// entries that fail normalization.
+const results = await pool(guidelines, (raw, i) => check(raw, i, files, changeNote))
 
 const findings = []
 const unverified = []
 
 for (let i = 0; i < guidelines.length; i++) {
-  const g = guidelines[i]
-  const r = results[i]
+  const ok = results[i]
 
-  if (!r) {
-    unverified.push(g.stem)
+  if (!ok) {
+    unverified.push(stemOf(guidelines[i], i))
+
     continue
   }
 
-  // Stamp priority from the caller's guideline ORDER, not alphabetically:
-  // ts-check resolves conflicting fixes strong-types > no-magic-values >
-  // data-over-logic > redundant-variable-inline, which an alphabetical sort
-  // would nearly reverse. Overwrite `rule` from the stem too — the agent's
-  // value is untrustworthy since redundant-variable-inline.md's body dictates
-  // its own rule string.
-  for (const f of r.findings) findings.push({ ...f, rule: g.stem, priority: i + 1 })
+  // [SHARED-CORE] Guarded per guideline. This loop used to run unguarded at top
+  // level, outside pool()'s catch, so one malformed result rejected the WHOLE
+  // workflow and discarded every other guideline's completed work. Staged in
+  // `local` so a mid-loop throw cannot leave a guideline both partially
+  // aggregated and listed as unverified.
+  try {
+    const local = []
+    let dropped = 0
+    let repaired = 0
+    const priority = priorityOf(ok.g.stem)
+
+    for (const f of ok.r.findings) {
+      if (!f || typeof f !== 'object' || Array.isArray(f)) {
+        dropped++
+
+        continue
+      }
+
+      const line = Number(f.line)
+      const file = typeof f.file === 'string' && f.file.trim() ? f.file : ''
+
+      if (!Number.isFinite(line) || !file) repaired++
+
+      // `rule` comes from OUR validated stem, never the agent's — the agent's
+      // value is untrustworthy because redundant-variable-inline.md's body
+      // dictates its own rule string. Coercing file/line also keeps the
+      // comparator below from ever seeing NaN.
+      local.push({
+        ...f,
+        file: file || '(file not reported)',
+        line: Number.isFinite(line) ? line : 0,
+        rule: ok.g.stem,
+        priority,
+      })
+    }
+
+    // Not push(...local): a spread on a large array can hit the argument limit.
+    for (const f of local) findings.push(f)
+
+    if (dropped) log(`${ok.g.stem}: dropped ${dropped} non-object finding(s)`)
+    if (repaired) log(`${ok.g.stem}: ${repaired} finding(s) had a missing file/line and were placeholder-filled`)
+  } catch (e) {
+    log(`${ok.g.stem}: UNVERIFIED — could not aggregate its findings: ${(e && e.message) || e}`)
+    unverified.push(ok.g.stem)
+  }
 }
 
-// file -> line -> priority. File-major keeps co-located findings adjacent so
-// Step 4's same-line dedup is mechanical, and a same-line conflict arrives
-// already resolved (highest-priority rule first at each line). Do NOT sort by
-// rule alphabetically the way golang-check does — ts's stems alphabetize to
-// nearly the reverse of the real priority order.
+// [SKILL-POLICY] file -> line -> priority. File-major keeps co-located findings
+// adjacent so Step 4's same-line dedup is mechanical, and a same-line conflict
+// arrives already resolved (highest-priority rule first at each line). Do NOT
+// sort by rule alphabetically the way golang-check does — ts's stems alphabetize
+// to nearly the reverse of the real priority order.
 findings.sort((a, b) => {
   if (a.file !== b.file) return a.file < b.file ? -1 : 1
   if (a.line !== b.line) return a.line - b.line
@@ -172,5 +383,4 @@ return {
   findings,
   findingCount: findings.length,
   unverified: unverified.sort(),
-  priorityOrder: guidelines.map(g => g.stem),
 }

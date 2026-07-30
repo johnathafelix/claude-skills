@@ -61,13 +61,15 @@ Build the two args you'll pass to the check:
 ```
 files = [ <the Step 1 list> ]              # one flat list, shared by all 4 checks
 
-guidelines = [                              # ORDER IS PRIORITY — do not reorder
+guidelines = [                              # keep this order; see the note below
   { stem: "strong-types",              path: "<abs>/guidelines/strong-types.md",              lines: <from wc -l> },
   { stem: "no-magic-values",           path: "<abs>/guidelines/no-magic-values.md",           lines: <from wc -l> },
   { stem: "data-over-logic",           path: "<abs>/guidelines/data-over-logic.md",            lines: <from wc -l> },
   { stem: "redundant-variable-inline", path: "<abs>/guidelines/redundant-variable-inline.md",  lines: <from wc -l> },
 ]
 ```
+
+**Order is informational on the primary path.** The `Workflow` script derives each finding's `priority` from its own canonical list, keyed by `stem`, so a mis-ordered array can no longer silently invert the ranking — it logs the disagreement instead. Keep the canonical order anyway: **the fallback path still assigns `priority` by hand from it** (Step 3), and a guideline whose stem the script does not recognise is ranked last with a warning.
 
 ### Step 3 — Run the check
 
@@ -80,7 +82,7 @@ Workflow({
 })
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent, capped at 4 concurrent, retries a guideline twice on a failed proof-of-read, and returns `{ findings, findingCount, unverified, priorityOrder }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent, capped at 4 concurrent, retries a guideline twice on a failed proof-of-read, and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
 
 **Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
