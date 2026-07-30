@@ -7,8 +7,10 @@
 // Ordering guarantee: continuation loops only continue when a hook blocks. This hook
 // never blocks, so it is safe to run on every Stop in the chain, including the final
 // one where auto-code-simplifier.js / enforce-golang-check.js / enforce-ts-check.js
-// have all bailed on stop_hook_active. That makes this the last thing to touch the
-// files, by construction — do NOT add the guard back, it would break that ordering.
+// have all gone quiet — auto-code-simplifier.js on stop_hook_active, the two
+// enforce-* hooks on their own per-hook block budget. That makes this the last thing
+// to touch the files, by construction — do NOT add the guard back, it would break
+// that ordering.
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');

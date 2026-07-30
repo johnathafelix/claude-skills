@@ -30,6 +30,15 @@ function main() {
   } catch { process.exit(0); }
 
   // Find the start of the current turn = last real human prompt.
+  //
+  // KNOWN LIMITATION (shared with the original enforce-*-check hooks): this walk
+  // also stops on two harness-injected `user`-role entries that are not human
+  // prompts — `isMeta` "Stop hook feedback:" entries, and async task-notification
+  // wakes (`origin.kind === 'task-notification'`). When it lands on one, the
+  // turn's edits fall before `start` and this hook sees zero changed files.
+  // Harmless here because the stop_hook_active guard above already limits this
+  // hook to one trigger per turn, so it never reaches a continuation Stop.
+  // lib/enforce-check.js#turnStart has the corrected walk if this ever needs it.
   let start = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const m = entries[i].message;

@@ -1,50 +1,28 @@
 #!/usr/bin/env node
-// Stop hook: after a turn that changed Go source, force Claude to run the
-// /golang-check skill once before finishing. Modeled on auto-code-simplifier.js.
-const fs = require('fs');
+// Stop hook: after a turn that changed Go source, make sure /golang-check
+// actually REPORTED findings before the turn can end — not merely that it was
+// dispatched. The check runs asynchronously via the Workflow tool, so a hook
+// that only demanded dispatch was satisfied by a task ID and let the findings
+// vanish. State machine and transcript shapes live in lib/enforce-check.js.
+const { runEnforcement, isTemp } = require('./lib/enforce-check.js');
 
-function readStdin() {
-  try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
-}
+runEnforcement({
+  basename: 'enforce-golang-check.js',
+  skill: '/golang-check',
+  // Must match `meta.name` in skills/golang-check/workflow.js — it is how a task
+  // notification is attributed back to this skill.
+  workflowName: 'golang-check',
+  agentType: 'go-idiom-checker',
+  noun: 'file',
+  lead: 'Go source was modified this turn',
+  // Phrased without a count: the engine already reports the file count, and this
+  // clause has to read correctly for one file as well as many.
+  scopeNote:
+    'the changed Go source to check it against the Go conventions (it fans out one focused ' +
+    'read-only agent per guideline and reports violations).',
 
-function main() {
-  let input;
-  try { input = JSON.parse(readStdin() || '{}'); } catch { process.exit(0); }
-
-  // Loop guard — we already triggered in this stop-continuation chain (once per turn).
-  if (input.stop_hook_active) process.exit(0);
-
-  // Skip plan mode (no real source edits land there).
-  if (input.permission_mode === 'plan') process.exit(0);
-
-  // Load the transcript.
-  const tp = input.transcript_path;
-  if (!tp || !fs.existsSync(tp)) process.exit(0);
-
-  let entries = [];
-  try {
-    for (const line of fs.readFileSync(tp, 'utf8').split('\n')) {
-      if (!line) continue;
-      try { entries.push(JSON.parse(line)); } catch { /* skip bad line */ }
-    }
-  } catch { process.exit(0); }
-
-  // Find the start of the current turn = last real human prompt.
-  let start = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const m = entries[i].message;
-    if (!m || m.role !== 'user') continue;
-    const c = m.content;
-    const isToolResult = Array.isArray(c) && c.some(b => b && b.type === 'tool_result');
-    if (!isToolResult) { start = i; break; }
-  }
-
-  const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
-  // OS temp trees (incl. Claude's session scratchpad) hold throwaway helpers, not source.
-  const isTemp = p => ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/']
-    .some(t => p.startsWith(t));
   // Mirror /golang-check's default scope: real, hand-written .go only.
-  const skip = p =>
+  skip: p =>
     !p.endsWith('.go') ||          // Go source only
     p.endsWith('_test.go') ||      // test files excluded from default scope
     p.includes('/vendor/') ||      // vendored deps
@@ -52,35 +30,5 @@ function main() {
     isTemp(p) ||                   // scratchpad/temp files
     /\.pb\.go$/.test(p) ||         // protobuf generated
     /_gen\.go$/.test(p) ||         // generated
-    /\.gen\.go$/.test(p);          // generated
-
-  const changed = new Set();
-  for (let i = start; i < entries.length; i++) {
-    const m = entries[i].message;
-    if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) continue;
-    for (const b of m.content) {
-      if (!b || b.type !== 'tool_use' || !EDIT_TOOLS.has(b.name)) continue;
-      const fp = (b.input && b.input.file_path) || '';
-      if (!fp || skip(fp)) continue;
-      changed.add(fp);
-    }
-  }
-
-  if (changed.size === 0) process.exit(0);
-
-  const n = changed.size;
-  process.stdout.write(JSON.stringify({
-    decision: 'block',
-    reason:
-      'Go source was modified this turn (' + n + ' file' + (n === 1 ? '' : 's') +
-      '). Before finishing, run the /golang-check skill on the changed Go ' +
-      'file' + (n === 1 ? '' : 's') + ' to check them against the Go conventions ' +
-      '(it fans out one focused sub-agent per guideline and reports violations). ' +
-      'Dispatching a check is not enough — this only blocks once per turn, so wait ' +
-      'for its findings (or UNVERIFIED guidelines) and address or report them ' +
-      'before finishing.'
-  }));
-  process.exit(0);
-}
-
-main();
+    /\.gen\.go$/.test(p),          // generated
+});
