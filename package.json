@@ -1,0 +1,12 @@
+{
+  "name": "claude-skills",
+  "private": true,
+  "description": "Marketplace repo for the claude-skills plugin. This package.json exists only to run the hook tests; the plugin itself has no build step and no dependencies.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
