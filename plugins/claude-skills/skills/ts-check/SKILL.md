@@ -39,7 +39,11 @@ The 4 checks live in the `guidelines/` directory that sits **alongside this SKIL
 
 **Do not `Read` the guideline bodies here.** They total ~2,400 lines across the 4 files; the old version of this skill read all of them into this context so it could paste them verbatim into each sub-agent. Each checker agent now Reads its own guideline from the absolute path you pass it. *This is the single biggest win of this design — do not reintroduce the reads.*
 
-Get each guideline's line count with **one** command: `wc -l guidelines/*.md`. Ignore the trailing `total` line — it is not a guideline. Each per-file count becomes that guideline's `lines`, used as a proof-of-read check on the agent that applies it; pass that agent the same absolute path so both sides run the identical command against the identical file.
+The orchestrator needs a few cheap facts per guideline, all obtainable without opening any file individually. Take **one glob-based command per fact**, not a per-file loop.
+
+In every command below, `$G` stands for the **absolute** `guidelines/` directory you just resolved — substitute the real path when you run it. Your working directory is the user's repo, not this skill's directory, so a bare `guidelines/*.md` does not expand here. **Quote the fixed part of the path and leave the `*` unquoted** — `'$G/'*.md` — because a fully quoted glob stops expanding while an unquoted path breaks on a space.
+
+1. **Line count**, via `wc -l '$G/'*.md`. Ignore the trailing `total` line — it is not a guideline. Parse each row as: the count is the **leading integer**, and the path is **everything after that first run of spaces** — do not split on whitespace, or a path such as `/Users/John Smith/…` gets cut in half. Each per-file count becomes that guideline's `lines`, used as a proof-of-read check on the agent that applies it; pass that agent the same absolute path so both sides run the identical command against the identical file. Because the glob is absolute, `wc -l` prints absolute paths, which are exactly the `path` values you need below.
 
 There is no version gate for ts-check (unlike golang-check) — none of the 4 guidelines declare a minimum version, so there is nothing to check or skip here.
 
@@ -50,7 +54,7 @@ The guideline set is a **fixed four, in priority order** — that order drives f
 3. `data-over-logic.md`
 4. `redundant-variable-inline.md`
 
-**Drift check:** if `wc -l guidelines/*.md` surfaces a file not in that list, report it as unranked and unchecked rather than silently ignoring it or guessing a priority.
+**Drift check:** if `wc -l '$G/'*.md` surfaces a file not in that list, report it as unranked and unchecked rather than silently ignoring it or guessing a priority.
 
 Build the two args you'll pass to the check:
 
