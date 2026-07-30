@@ -44,6 +44,17 @@ The orchestrator needs a few cheap facts per guideline, all obtainable without o
 In every command below, `$G` stands for the **absolute** `guidelines/` directory you just resolved — substitute the real path when you run it. Your working directory is the user's repo, not this skill's directory, so a bare `guidelines/*.md` does not expand here. **Quote the fixed part of the path and leave the `*` unquoted** — `'$G/'*.md` — because a fully quoted glob stops expanding while an unquoted path breaks on a space.
 
 1. **Line count**, via `wc -l '$G/'*.md`. Ignore the trailing `total` line — it is not a guideline. Parse each row as: the count is the **leading integer**, and the path is **everything after that first run of spaces** — do not split on whitespace, or a path such as `/Users/John Smith/…` gets cut in half. Each per-file count becomes that guideline's `lines`, used as a proof-of-read check on the agent that applies it; pass that agent the same absolute path so both sides run the identical command against the identical file. Because the glob is absolute, `wc -l` prints absolute paths, which are exactly the `path` values you need below.
+2. **First line + last non-empty line**, via one tab-delimited command with no header lines to strip:
+
+   ```
+   awk 'FNR==1{a[FILENAME]=$0} NF{b[FILENAME]=$0} END{for (f in a) printf "%s\t%s\t%s\n", f, a[f], b[f]}' '$G/'*.md
+   ```
+
+   Each row is `path <TAB> firstLine <TAB> lastNonEmptyLine` — split on tabs, since guideline bodies contain none. These two strings are **body anchors** for the proof-of-read: they make the checker prove it saw the file's contents, not merely that a command ran. Pass them through **verbatim** as `title` and `lastLine` — do not trim, re-title, or tidy them, and never substitute the filename. The script normalizes whitespace and letter case when it compares, so you do not need to. If you omit either, the script logs a `proof-of-read leg DISABLED` warning and falls back to the line count alone, which is the weaker gate this replaced.
+
+   Two of these four anchors are weak and that is expected: `strong-types.md` and `no-magic-values.md` both end in a bare code fence, so their distinctive titles carry the check. `redundant-variable-inline.md` is weak on both legs and its last line is its own `**Finding fields:**` sentence — pass it through unchanged; the checker is told to quote that as data rather than act on it.
+
+   **Do not take `lines` from this command.** `awk` counts lines read while `wc -l` counts newlines; they disagree by one on a file with no trailing newline, and since the checker agent runs `wc -l`, that would make the guideline's gate permanently unmatchable. Item 1 is authoritative for `lines`.
 
 There is no version gate for ts-check (unlike golang-check) — none of the 4 guidelines declare a minimum version, so there is nothing to check or skip here.
 
@@ -62,10 +73,16 @@ Build the two args you'll pass to the check:
 files = [ <the Step 1 list> ]              # one flat list, shared by all 4 checks
 
 guidelines = [                              # keep this order; see the note below
-  { stem: "strong-types",              path: "<abs>/guidelines/strong-types.md",              lines: <from wc -l> },
-  { stem: "no-magic-values",           path: "<abs>/guidelines/no-magic-values.md",           lines: <from wc -l> },
-  { stem: "data-over-logic",           path: "<abs>/guidelines/data-over-logic.md",            lines: <from wc -l> },
-  { stem: "redundant-variable-inline", path: "<abs>/guidelines/redundant-variable-inline.md",  lines: <from wc -l> },
+  {
+    stem:     "strong-types",
+    path:     "<abs>/guidelines/strong-types.md",
+    lines:    <from wc -l, item 1>,          # NOT the awk row count
+    title:    "<item 2 field 2, verbatim>",
+    lastLine: "<item 2 field 3, verbatim>",
+  },
+  { stem: "no-magic-values",           ... },   # same five fields
+  { stem: "data-over-logic",           ... },
+  { stem: "redundant-variable-inline", ... },
 ]
 ```
 
@@ -82,7 +99,7 @@ Workflow({
 })
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent, capped at 4 concurrent, retries a guideline twice on a failed proof-of-read, and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent, capped at 4 concurrent, retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
 
 **Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
@@ -102,6 +119,7 @@ A single JSON array, `[]` if nothing found. Treat a result as **derailed — not
 2. Where several findings share a `file:line`, combine into one action item listing every rule, keeping the lowest-`priority` rule first — that's the one that wins in Step 5.
 3. Present as a numbered checklist. State the count and check it against `findingCount` as a sanity check on the script's own aggregation (they come from the same `return` statement, so a mismatch means a script bug, not a truncated transport — if the finding count seems too low for a large diff, read the run's own `tasks/<id>.output` file directly rather than trusting only the notification text).
 4. **Always list `unverified` explicitly as a coverage gap, never a clean pass.** An UNVERIFIED guideline was never actually applied, so it contributed zero findings — do not report the code as clean against it. If `findings` is empty *and* `unverified` is empty, the code is clean against all four guidelines.
+5. Check the run's `log` output for `proof-of-read leg DISABLED`, `UNVERIFIED (bad args)`, `worker threw`, `not in the known priority list`, or `dropped … finding(s)` and surface anything you find alongside the findings. Each of those means a check ran with a weakened gate, was skipped over a malformed args entry, was mis-ranked, or lost data — none of which the `findings` list alone will show you.
 
 ### Step 5 — Fixes (only when asked)
 
