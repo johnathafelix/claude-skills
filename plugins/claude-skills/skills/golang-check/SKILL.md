@@ -89,7 +89,14 @@ Dispatch each guideline to its own `claude-skills:go-idiom-checker` agent, **at 
 {"file":"relative/path.go","line":42,"symbol":"NewStore","rule":"<guideline stem>","severity":"error|warning|info","confidence":"high|medium","description":"what is wrong, specifically","suggestedFix":"before -> after"}
 ```
 
-A single JSON array, `[]` if nothing found. Treat a result as **derailed — not a clean pass** — if it doesn't parse as a JSON array or the agent made 0 tool calls; re-dispatch derailed guidelines, and after 2 retries still derailing, report that guideline as **UNVERIFIED**.
+Severity: `error` for correctness bugs (data races, leaks, typed-nil, slice aliasing), `warning` for idiom/convention violations, `info` for stylistic or forward-looking suggestions — unless the guideline body specifies its own mapping for a case (`modernizers.md` defaults to `info`). Confidence: `high` when the violation is unambiguous from the guideline's own criteria, `medium` when it depends on context the agent cannot see; there is no `low` — prefer silence.
+
+A single JSON array, `[]` if nothing found. A healthy checker always Reads its guideline (**≥1 tool call**) and returns a JSON array. Treat a result as **derailed — NOT a clean pass** — when either:
+
+- its output does not parse as a JSON array (prose, an apology, a fragment of instructions, "I don't have a task", an empty/near-empty message), **or**
+- it made **0 tool calls** (it never opened its guideline or the target files).
+
+Re-dispatch each derailed guideline, alone or in a small batch. If it still derails after 2 retries, report that guideline as **UNVERIFIED**. **Never accept a non-JSON or 0-tool-call response as `[]`** — a derailed check is a coverage gap, not a clean bill of health.
 
 ### Step 4 — Present results
 
@@ -99,10 +106,12 @@ A single JSON array, `[]` if nothing found. Treat a result as **derailed — not
 4. Always list any **UNVERIFIED** guidelines (from `unverified`, or from fallback retries) and any **version-skipped** guidelines from Step 2, so coverage gaps are explicit rather than silently read as a clean pass.
 5. Check the run's `log` output for `proof-of-read leg DISABLED`, `UNVERIFIED (bad args)`, `worker threw`, or `dropped … finding(s)` and surface anything you find alongside the findings. Each of those means a check ran with a weakened gate, was skipped over a malformed args entry, or lost data — none of which the `findings` list alone will show you.
 
+> **Reliability note.** Sub-agents receive large injected context attachments (a deferred-tool list plus the skill catalog, ~36 KB for `general-purpose`). Under high fan-out this occasionally makes a sub-agent ignore its task prompt and emit hallucinated system-prompt-like text with 0 tool calls instead of findings. Three mitigations, layered: (1) `claude-skills:go-idiom-checker` restricts the toolset so those attachments shrink, and the concurrency cap of 4 lowers the trigger rate — that cap is why **both** paths batch; (2) on the primary path the three-leg proof-of-read makes a derailed response fail the gate and be retried, because a schema-forced reply can still carry an invented line count but cannot invent the guideline's first and last lines; (3) on the fallback path the non-JSON/0-tool-call detector above catches what slips through. A derailed check is never silently counted as clean.
+
 ### Step 5 — Fixes (only when asked)
 
 Do not modify code as part of the check. If the user asks to fix findings:
 
 1. Apply each accepted finding with Edit.
 2. After changing a return type or parameter type, check callers (`grep`/graph) and update them so the package still builds.
-3. Verify with `go build ./...` (and `go vet ./...` if available) for the affected packages; report anything still failing.
+3. Verify with `go build ./...` (and `go vet ./...` if available) for the affected packages. **Report any remaining failures and fix them before declaring done** — these edits are yours, so leaving the package unbuildable is not an acceptable end state.
