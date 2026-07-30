@@ -30,4 +30,4 @@ return computeThing(input);
 - The declaration and return are separated by other statements that could change meaning if reordered.
 - Inlining would harm debuggability in a way the author clearly intended (e.g., a name that documents intent for a complex expression). Prefer inlining unless the name adds real value beyond the function name itself.
 
-**Return findings as:** `{ file, line, rule: 'redundant-variable-inline', description, suggestedFix }` where `suggestedFix` shows the inlined `return` statement.
+**Finding fields:** `{ file, line, rule: 'redundant-variable-inline', description, suggestedFix }` where `suggestedFix` shows the inlined `return` statement. If your caller provided a structured-output schema, satisfy that schema instead — the field meanings above still apply.

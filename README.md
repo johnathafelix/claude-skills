@@ -5,7 +5,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
 - **16 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, and end-to-end task implementation.
-- **5 agents** — `go-idiom-checker` (the restricted sub-agent `golang-check` fans out to) plus the `plan-and-implement-task` team: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
+- **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the `plan-and-implement-task` team: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
 ## Setup
@@ -84,8 +84,8 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `plan-and-implement-task` | Implement one task end to end: user-approved plan (plan mode), wave-scheduled implementation by a fable/opus/sonnet agent team, final lead code review |
 | `tdd` | Test-driven development (red-green-refactor) |
 | `write-pending-unit-tests` | Write tests for files changed vs. the base branch |
-| `golang-check` | Check Go code against Go conventions (fans out per-guideline) |
-| `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — self-contained, fans out per-guideline |
+| `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) |
+| `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) |
 | `check-rest-api-design` | Review a REST/HTTP API against design best practices |
 | `debug-issue` | Systematically debug using graph-powered navigation † |
 | `explore-codebase` | Navigate codebase structure via the knowledge graph † |

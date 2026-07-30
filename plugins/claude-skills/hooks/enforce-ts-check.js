@@ -72,9 +72,11 @@ function main() {
     reason:
       'TypeScript source was modified this turn (' + n + ' file' + (n === 1 ? '' : 's') +
       '). Before finishing, run the /ts-check skill on the changed .ts/.tsx ' +
-      'file' + (n === 1 ? '' : 's') + ' to check and fix them against the TypeScript ' +
-      'quality rules (strong types, no magic values, data over logic). Apply its ' +
-      'fixes, then stop. (Runs once per turn.)'
+      'file' + (n === 1 ? '' : 's') + ' to check them against the TypeScript quality rules ' +
+      '(strong types, no magic values, data over logic, redundant-variable inlining) — it ' +
+      'fans out one focused agent per guideline and reports violations. Dispatching a check ' +
+      'is not enough — this only blocks once per turn, so wait for its findings (or ' +
+      'UNVERIFIED guidelines) and address or report them before finishing.'
   }));
   process.exit(0);
 }
