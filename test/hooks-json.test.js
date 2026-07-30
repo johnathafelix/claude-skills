@@ -11,17 +11,17 @@ const HOOKS = path.join(PLUGIN, 'hooks');
 
 const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
 
-function commandsFor(event) {
-  return config.hooks[event]
-    .flatMap(group => group.hooks)
-    .map(h => h.command);
+// hooks.json nests hooks inside matcher groups, so every assertion below starts
+// by flattening the groups for one event.
+function registered(event) {
+  return config.hooks[event].flatMap(group => group.hooks);
 }
 
 function basenames(event) {
-  return commandsFor(event).map(c => {
-    const m = c.match(/hooks\/([A-Za-z0-9._-]+\.js)/);
+  return registered(event).map(({ command }) => {
+    const m = command.match(/hooks\/([A-Za-z0-9._-]+\.js)/);
 
-    return m ? m[1] : c;
+    return m ? m[1] : command;
   });
 }
 
@@ -50,7 +50,7 @@ test('every registered hook command points at a file that exists', () => {
 
 test('every registered hook declares a timeout', () => {
   for (const event of Object.keys(config.hooks)) {
-    for (const h of config.hooks[event].flatMap(g => g.hooks)) {
+    for (const h of registered(event)) {
       assert.strictEqual(typeof h.timeout, 'number', h.command + ' has no numeric timeout');
       assert.ok(h.timeout > 0, h.command + ' has a non-positive timeout');
     }

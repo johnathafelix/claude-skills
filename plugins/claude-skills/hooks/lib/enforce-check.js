@@ -205,6 +205,12 @@ function parseNotification(blob) {
 // `toolUseResult.status === 'async_launched'` carries taskId + workflowName +
 // scriptPath; `workflowName` is the script's own `meta.name`.
 function collectDispatch(entries, config) {
+  // Both scriptPath matches below share this marker, so the ack rule and the
+  // tool_use rule stay in step. Keep it that way: they are two views of the same
+  // "is this dispatch ours?" question, and attributing a notification to the
+  // wrong skill would satisfy a hook that should have blocked.
+  const pathMarker = '/' + config.workflowName + '/';
+
   const taskIds = new Set();
   const toolUseIds = new Set();
   let sawWorkflow = false;
@@ -214,8 +220,7 @@ function collectDispatch(entries, config) {
     const r = e.toolUseResult;
     if (r && r.status === 'async_launched') {
       const byName = r.workflowName === config.workflowName;
-      const byPath =
-        typeof r.scriptPath === 'string' && r.scriptPath.indexOf('/' + config.workflowName + '/') !== -1;
+      const byPath = typeof r.scriptPath === 'string' && r.scriptPath.indexOf(pathMarker) !== -1;
 
       if (byName || byPath) {
         sawWorkflow = true;
@@ -228,13 +233,13 @@ function collectDispatch(entries, config) {
     if (!m || !Array.isArray(m.content)) continue;
 
     for (const b of m.content) {
-      if (!b) continue;
+      if (!b || b.type !== 'tool_use') continue;
 
       // A Workflow tool_use whose scriptPath names this skill, in case the ack
       // shape changes.
-      if (b.type === 'tool_use' && b.name === 'Workflow') {
+      if (b.name === 'Workflow') {
         const sp = (b.input && b.input.scriptPath) || '';
-        if (sp.indexOf('/' + config.workflowName + '/') !== -1) {
+        if (sp.indexOf(pathMarker) !== -1) {
           sawWorkflow = true;
           if (b.id) toolUseIds.add(b.id);
         }
@@ -242,7 +247,7 @@ function collectDispatch(entries, config) {
 
       // Fallback direct fan-out. A FOREGROUND Agent call returns its findings in
       // the tool_result, so the dispatch itself is the completion.
-      if (b.type === 'tool_use' && b.name === 'Agent') {
+      if (b.name === 'Agent') {
         const st = (b.input && b.input.subagent_type) || '';
         const background = Boolean(b.input && b.input.run_in_background);
 
@@ -270,6 +275,10 @@ function findNotification(entries, dispatch) {
   }
 
   return null;
+}
+
+function plural(n, word) {
+  return n + ' ' + word + (n === 1 ? '' : 's');
 }
 
 // A run is a real pass only when every agent finished and the payload is usable.
@@ -333,10 +342,6 @@ function notify(systemMessage) {
   process.exit(0);
 }
 
-function plural(n, word) {
-  return n + ' ' + word + (n === 1 ? '' : 's');
-}
-
 function runEnforcement(config) {
   let input;
   try {
@@ -370,17 +375,17 @@ function runEnforcement(config) {
   const changed = changedFiles(entries, config.skip);
   if (changed.size === 0) process.exit(0);
 
-  const n = changed.size;
+  // Every message below names the scope the same way ("1 file" / "2 files").
+  const changedLabel = plural(changed.size, config.noun);
 
   // Cap FIRST, before any evidence work. Termination depends on this ordering.
-  const priorBlocks = countPriorBlocks(entries, config.basename);
-  if (priorBlocks >= MAX_BLOCKS) {
+  if (countPriorBlocks(entries, config.basename) >= MAX_BLOCKS) {
     notify(
       config.skill +
         ' was asked for ' +
         MAX_BLOCKS +
         ' times this turn without a healthy result, so this hook has stopped blocking. ' +
-        plural(n, config.noun) +
+        changedLabel +
         ' changed this turn and remain unchecked — treat that as a coverage gap, not a clean bill of health.',
     );
   }
@@ -393,7 +398,7 @@ function runEnforcement(config) {
     block(
       config.lead +
         ' (' +
-        plural(n, config.noun) +
+        changedLabel +
         '). Before finishing, run the ' +
         config.skill +
         ' skill on ' +
@@ -414,7 +419,7 @@ function runEnforcement(config) {
     notify(
       config.skill +
         ' is still running for ' +
-        plural(n, config.noun) +
+        changedLabel +
         '. Not blocking — report its findings when the task notification arrives.',
     );
   }
@@ -426,7 +431,7 @@ function runEnforcement(config) {
   block(
     config.lead +
       ' (' +
-      plural(n, config.noun) +
+      changedLabel +
       ') and ' +
       config.skill +
       ' did run, but it was not a real pass: ' +

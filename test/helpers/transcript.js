@@ -54,16 +54,15 @@ function edit(filePath, tool) {
 
 // A tool_result carrier. Role is 'user', so the boundary walk must reject it by
 // inspecting content rather than role.
-function toolResultUser(toolUseId, content, extra) {
-  const entry = {
+function toolResultUser(toolUseId, content, extra = {}) {
+  return {
     type: 'user',
     message: {
       role: 'user',
       content: [{ type: 'tool_result', tool_use_id: toolUseId, content: content || 'ok' }],
     },
+    ...extra,
   };
-
-  return Object.assign(entry, extra || {});
 }
 
 // Written by the harness every time a Stop hook blocks. 147 real occurrences.
@@ -99,12 +98,11 @@ function interrupted() {
 
 // Workflow launch: returns [tool_use, tool_result]. The ack proves DISPATCH ONLY
 // — the run finishes minutes later. `workflowName` is the script's meta.name.
-function workflowLaunch(workflowName, opts) {
-  const o = opts || {};
-  const taskId = o.taskId || 'w' + workflowName;
-  const toolUseId = o.toolUseId || 'toolu_wf_' + workflowName;
+function workflowLaunch(workflowName, opts = {}) {
+  const taskId = opts.taskId || 'w' + workflowName;
+  const toolUseId = opts.toolUseId || 'toolu_wf_' + workflowName;
   const scriptPath =
-    o.scriptPath ||
+    opts.scriptPath ||
     '/Users/x/Documents/claude-skills/plugins/claude-skills/skills/' + workflowName + '/workflow.js';
 
   return [
@@ -122,12 +120,11 @@ function workflowLaunch(workflowName, opts) {
 }
 
 // Fallback direct fan-out. A foreground Agent tool_result IS the findings.
-function agentDispatch(subagentType, opts) {
-  const o = opts || {};
-  const id = o.toolUseId || 'toolu_agent_' + subagentType;
+function agentDispatch(subagentType, opts = {}) {
+  const id = opts.toolUseId || 'toolu_agent_' + subagentType;
   const entries = [assistantToolUse('Agent', { subagent_type: subagentType }, id)];
 
-  if (o.result !== undefined) entries.push(toolResultUser(id, o.result));
+  if (opts.result !== undefined) entries.push(toolResultUser(id, opts.result));
 
   return entries;
 }
@@ -144,25 +141,32 @@ function escapeXml(s) {
 // proof-of-read populates. The hook parser's frozen contract is exactly
 // findings + unverified + the usage counters — if a later change to
 // workflow.js's return shape breaks a test here, that is the coupling working.
-function notificationBlob(fields) {
-  const f = fields || {};
-  const result = f.result === undefined ? { findings: [], findingCount: 0, unverified: [] } : f.result;
-  const usage = Object.assign(
-    { agent_count: 12, agents_done: 12, agents_error: 0, agents_skipped: 0 },
-    f.usage || {},
-  );
+function notificationBlob(fields = {}) {
+  // `=== undefined` distinguishes "caller omitted result" from "caller chose a
+  // falsy or non-object one" — the blob has to carry whatever payload a test
+  // picked, including the raw unparseable string one of them uses.
+  const result =
+    fields.result === undefined ? { findings: [], findingCount: 0, unverified: [] } : fields.result;
 
-  const usageXml = Object.keys(usage)
-    .map(k => '<' + k + '>' + usage[k] + '</' + k + '>')
+  const usage = {
+    agent_count: 12,
+    agents_done: 12,
+    agents_error: 0,
+    agents_skipped: 0,
+    ...fields.usage,
+  };
+
+  const usageXml = Object.entries(usage)
+    .map(([k, v]) => '<' + k + '>' + v + '</' + k + '>')
     .join('');
 
   const resultText = typeof result === 'string' ? result : JSON.stringify(result);
 
   return (
     '<task-notification>\n' +
-    '<task-id>' + (f.taskId || 'wtask') + '</task-id>\n' +
-    '<tool-use-id>' + (f.toolUseId || 'toolu_wf') + '</tool-use-id>\n' +
-    '<status>' + (f.status || 'completed') + '</status>\n' +
+    '<task-id>' + (fields.taskId || 'wtask') + '</task-id>\n' +
+    '<tool-use-id>' + (fields.toolUseId || 'toolu_wf') + '</tool-use-id>\n' +
+    '<status>' + (fields.status || 'completed') + '</status>\n' +
     '<result>' + escapeXml(resultText) + '</result>\n' +
     '<usage>' + usageXml + '</usage>\n' +
     '</task-notification>'
@@ -225,18 +229,19 @@ function runHook(basename, input) {
 }
 
 // The common case: a turn that edited `files` and then stopped.
-function turnEditing(files, opts) {
-  const o = opts || {};
-  const entries = [humanPrompt('do the thing')].concat(files.map(f => edit(f, o.tool)));
+function turnEditing(files, opts = {}) {
+  const entries = [humanPrompt('do the thing')].concat(files.map(f => edit(f, opts.tool)));
 
-  return writeTranscript(entries.concat(o.after || []));
+  return writeTranscript(entries.concat(opts.after || []));
 }
 
-function stopInput(transcriptPath, extra) {
-  return Object.assign(
-    { transcript_path: transcriptPath, stop_hook_active: false, permission_mode: 'default' },
-    extra || {},
-  );
+function stopInput(transcriptPath, extra = {}) {
+  return {
+    transcript_path: transcriptPath,
+    stop_hook_active: false,
+    permission_mode: 'default',
+    ...extra,
+  };
 }
 
 module.exports = {
