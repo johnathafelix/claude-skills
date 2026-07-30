@@ -19,6 +19,8 @@ export const meta = {
 //   - files: golang scopes per guideline (g.files); ts shares one args.files
 //   - severity/confidence: golang only — ts's schema has no such fields
 //   - PRIORITY constant: ts only; golang has no priority ranking
+//   - findingCount in the return: ts only — ts-check/SKILL.md Step 4 checks its
+//     presented count against it, and golang's SKILL.md has no such step
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Empirically derived (see golang-check/SKILL.md): fanning out all guidelines at
@@ -415,10 +417,9 @@ for (let i = 0; i < guidelines.length; i++) {
 // group-by-guideline presentation. ts-check deliberately sorts
 // file -> line -> priority instead; do NOT unify them.
 //
-// This is only safe because `rule` is stamped from the validated stem in
-// aggregation above. If that stamp is ever removed, this comparator goes back to
-// grouping by whatever string the agent chose — and can become inconsistent on a
-// missing value. The stamp and this sort are a pair.
+// Safe only because `rule` is stamped from the validated stem in aggregation
+// above — that comment proves what an unstamped rule does to this comparator.
+// The stamp and this sort are a pair; do not remove one without the other.
 findings.sort((a, b) => {
   if (a.rule !== b.rule) return a.rule < b.rule ? -1 : 1
   if (a.file !== b.file) return a.file < b.file ? -1 : 1

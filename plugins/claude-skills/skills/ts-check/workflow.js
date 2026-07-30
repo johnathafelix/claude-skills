@@ -18,6 +18,8 @@ export const meta = {
 //   - files: ts shares one args.files; golang scopes per guideline (g.files)
 //   - severity/confidence: golang only — this schema has no such fields
 //   - PRIORITY constant: ts only; golang has no priority ranking
+//   - findingCount in the return: ts only — SKILL.md Step 4 checks its presented
+//     count against it, so do NOT drop it to match golang
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Empirically derived in golang-check (see golang-check/SKILL.md): fanning out
