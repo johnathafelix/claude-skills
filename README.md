@@ -6,7 +6,7 @@ This repo is a **plugin marketplace** containing a single plugin, `claude-skills
 
 - **16 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, and end-to-end task implementation.
 - **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the `plan-and-implement-task` team: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
-- **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
+- **6 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
 ## Setup
 
@@ -102,8 +102,9 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
 | `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` before finishing |
 | `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` before finishing |
+| `format-with-prettier.js` | Stop | Formats changed files with `prettier --write`, last in the turn (only in projects with a prettier config) |
 
-The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files.
+The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files; `format-with-prettier.js` also no-ops in projects that haven't opted into prettier.
 
 ## Dependencies & caveats
 
