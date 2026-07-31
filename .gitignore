@@ -4,3 +4,6 @@
 # Local Claude Code state (machine-specific, not part of the plugin)
 .claude/
 .code-review-graph/
+
+# Sandboxes from test/format-with-prettier.test.js; cleaned up unless a run crashes
+test/tmp-sandbox-*/

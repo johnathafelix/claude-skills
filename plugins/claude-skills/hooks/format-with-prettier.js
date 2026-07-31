@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Stop hook: after every other Stop hook has had its say, format files this turn
-// touched with `prettier --write`, but only in projects that opted into prettier
-// (a .prettierrc*/prettier.config.*/package.json#prettier found walking up from the
-// file). Deliberately has NO stop_hook_active guard — see below.
+// touched with `prettier --write`, in every project — a prettier config is no longer
+// required, it only decides which directory prettier runs from. Projects without one
+// get prettier's defaults, still filtered through their .editorconfig and
+// .gitignore/.prettierignore. Deliberately has NO stop_hook_active guard — see below.
 //
 // Ordering guarantee: continuation loops only continue when a hook blocks. This hook
 // never blocks, so it is safe to run on every Stop in the chain, including the final
@@ -45,8 +46,17 @@ function hasPrettierConfig(dir, names) {
   }
 }
 
-/** Walk up from `dir` for a prettier project root, or null. Results memoized by dir. */
-function findPrettierRoot(dir, cache) {
+/**
+ * Walk up from `dir` for the directory prettier should run in — the nearest prettier
+ * project, else the enclosing repo root — or null if the walk reaches the filesystem
+ * root without finding either. Results memoized by dir.
+ *
+ * cwd still matters even though prettier resolves each file's config from the file's
+ * own path: it picks which prettier binary runs (a project-local install beats the
+ * npx cache) and where .gitignore/.prettierignore resolve from. So a project that
+ * declares a config keeps getting its own root, exactly as before.
+ */
+function findRunRoot(dir, cache) {
   if (cache.has(dir)) return cache.get(dir);
 
   let names = [];
@@ -55,17 +65,32 @@ function findPrettierRoot(dir, cache) {
   const parent = path.dirname(dir);
 
   let result;
-  if (hasPrettierConfig(dir, names)) {
+  if (hasPrettierConfig(dir, names) || names.includes('.git')) {
     result = dir;
-  } else if (names.includes('.git') || parent === dir) {
-    // A repo root (or the filesystem root) bounds the walk so it can't escape onto the machine.
+  } else if (parent === dir) {
+    // The filesystem root bounds the walk so it can't escape onto the machine.
     result = null;
   } else {
-    result = findPrettierRoot(parent, cache);
+    result = findRunRoot(parent, cache);
   }
 
   cache.set(dir, result);
   return result;
+}
+
+// A file prettier rewrote: "src/a.js 12ms". One it left alone gets a trailing
+// "(unchanged)" and so does not match, and neither does anything else npx may print.
+const REWRITTEN_RE = /\s\d+ms$/;
+
+/**
+ * How many files a `prettier --write` run actually rewrote. It prints one line per
+ * file and marks the ones it left alone, so counting the files handed to it would
+ * announce a formatting pass on every turn that touched an already-clean file — which,
+ * now that no opt-in is required, is most turns. Matching the written shape rather than
+ * excluding the unchanged one keeps an unrecognized line silent instead of loud.
+ */
+function countRewritten(stdout) {
+  return stdout.split('\n').filter(l => REWRITTEN_RE.test(l.trimEnd())).length;
 }
 
 function main() {
@@ -121,29 +146,43 @@ function main() {
 
   if (changed.size === 0) process.exit(0);
 
-  // Group files by prettier project root; files with no root are skipped (opt-in only).
+  // One prettier run per root directory; a file with no project boundary above it is
+  // formatted from its own directory.
   const rootCache = new Map();
   const byRoot = new Map();
   for (const fp of changed) {
-    const root = findPrettierRoot(path.dirname(fp), rootCache);
-    if (!root) continue;
+    const dir = path.dirname(fp);
+    const root = findRunRoot(dir, rootCache) || dir;
     if (!byRoot.has(root)) byRoot.set(root, []);
     byRoot.get(root).push(fp);
   }
 
-  if (byRoot.size === 0) process.exit(0);
+  // One budget shared by every root, because hooks.json times this hook out as a
+  // whole (30s) rather than per exec. Per-root timeouts would add up past that and
+  // get the hook killed mid-loop, formatting some files and reporting nothing.
+  const deadline = Date.now() + 25_000;
 
   let formatted = 0;
+  let skipped = 0;
   const failures = [];
   for (const [root, files] of byRoot) {
+    const budget = deadline - Date.now();
+    if (budget <= 0) {
+      skipped += files.length;
+      continue;
+    }
+
     try {
-      execFileSync('npx', ['prettier', '-u', '--write', ...files], {
+      // --yes so a project without prettier installed resolves it from the npx cache
+      // instead of stalling on npm's install confirmation.
+      const out = execFileSync('npx', ['--yes', 'prettier', '-u', '--write', ...files], {
         cwd: root,
         stdio: 'pipe',
         encoding: 'utf8',
-        timeout: 20_000,
+        timeout: budget,
       });
-      formatted += files.length;
+
+      formatted += countRewritten(out);
     } catch (err) {
       const detail = (err.stderr || err.message || 'unknown error').trim();
 
@@ -153,6 +192,7 @@ function main() {
 
   const parts = [];
   if (formatted > 0) parts.push(`prettier formatted ${formatted} file${formatted === 1 ? '' : 's'}`);
+  if (skipped > 0) parts.push(`prettier ran out of time before ${skipped} file${skipped === 1 ? '' : 's'}`);
   if (failures.length > 0) parts.push(`prettier failed for ${failures.join('; ')}`);
 
   if (parts.length > 0) {

@@ -102,11 +102,13 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
 | `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` to actually **report** before finishing |
 | `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` to actually **report** before finishing |
-| `format-with-prettier.js` | Stop | Formats changed files with `prettier --write`, last in the turn (only in projects with a prettier config) |
+| `format-with-prettier.js` | Stop | Formats changed files with `prettier --write`, last in the turn, in every project — a prettier config is optional |
 
 The two `enforce-*` hooks share their state machine in `hooks/lib/enforce-check.js`; each hook file is just a config block. They check for a terminal task notification representing a real pass, not merely that the skill was dispatched — the checks run asynchronously, so a task ID alone would let the findings vanish. Each hook blocks at most 3 times per turn, and never blocks while a run is still in flight.
 
-The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files; `format-with-prettier.js` also no-ops in projects that haven't opted into prettier.
+The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files.
+
+`format-with-prettier.js` needs no per-project opt-in: it formats every changed file with a prettier-supported extension, skipping only `.claude/` and temp trees. A project's prettier config (`.prettierrc*`, `prettier.config.*`, `package.json#prettier`) is no longer a gate — it only decides which directory prettier runs from, which in turn picks a project-local prettier binary over the `npx` cache and roots `.gitignore`/`.prettierignore` resolution. A project without one gets prettier's defaults, still narrowed by its `.editorconfig`. Its 30s `hooks.json` timeout is shared across all roots in one turn; anything left when the budget runs out is reported, not silently dropped. It counts only the files prettier actually rewrote, so a turn that touched none stays silent.
 
 ## Dependencies & caveats
 
