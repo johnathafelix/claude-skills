@@ -1,7 +1,7 @@
 ---
 name: update-pr-description
 description: Update the current PR description with a summary of changes compared to the PR base branch
-disable-model-invocation: true
+disable-model-invocation: false
 model: claude-sonnet
 ---
 
