@@ -240,6 +240,12 @@ async function check(raw, i, changeNote) {
         phase: 'Check',
         schema: FINDINGS_SCHEMA,
         agentType: 'claude-skills:go-idiom-checker',
+        // Pinned, not inherited: a weaker session model degrades these checks
+        // invisibly — a shallow read returns [], indistinguishable from a pass.
+        // Set here as well as in the agent definition because the Workflow
+        // contract says an agent() call without `model` inherits the main-loop
+        // model, i.e. agentType frontmatter may not apply on this path.
+        model: 'opus',
       })
     } catch (e) {
       log(`${g.stem}: agent call threw on attempt ${attempt}/${RETRIES + 1} — ${(e && e.message) || e}`)

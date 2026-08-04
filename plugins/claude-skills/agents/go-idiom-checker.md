@@ -1,6 +1,7 @@
 ---
 name: go-idiom-checker
 description: Read-only Go idiom checker. Applies exactly ONE golang-check guideline to a fixed list of Go files and returns findings as a JSON array. Restricted toolset keeps its injected context minimal so it is far less likely to derail than a general-purpose sub-agent. Used by the golang-check skill's fan-out.
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

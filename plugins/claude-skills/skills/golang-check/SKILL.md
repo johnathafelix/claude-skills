@@ -1,6 +1,7 @@
 ---
 name: golang-check
 description: USE WHEN reviewing, writing, or refactoring Go code and you want it checked against Go conventions — naming, type/API design (incl. accept interfaces/return structs), functions & signatures, declarations, errors, concurrency, gotchas, modernizers (Go 1.26+ new(expr) & other go fix rewrites), testing, structure, and doc comments. Dispatches one focused agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable) and reports violations with file:line and fixes. Extend by dropping a new file into guidelines/.
+model: opus
 ---
 
 # Go Idiom Check — Orchestrator
@@ -79,11 +80,11 @@ Workflow({
 })
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:go-idiom-checker` agent, capped at 4 concurrent (empirically necessary — see the comment in `workflow.js` for why), retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, unverified }` already sorted.
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:go-idiom-checker` agent **pinned to `model: "opus"`** (a weaker inherited model degrades these checks invisibly — a shallow read returns `[]`, indistinguishable from a clean pass), capped at 4 concurrent (empirically necessary — see the comment in `workflow.js` for why), retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, unverified }` already sorted.
 
 **Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
-Dispatch each guideline to its own `claude-skills:go-idiom-checker` agent, **at most 4 at a time, awaiting each batch before the next** (larger batches measurably raise the rate of derailed, hallucinated 0-tool-call responses). Each prompt must name its guideline by absolute path (Read it IN FULL — the fallback agent does need to open it here, since there is no script to hand it a pre-resolved path list), give the in-scope files for that guideline, apply only that one guideline, and end with this output contract as the entire final message — nothing before or after:
+Dispatch each guideline to its own `claude-skills:go-idiom-checker` agent **with `model: "opus"`**, **at most 4 at a time, awaiting each batch before the next** (larger batches measurably raise the rate of derailed, hallucinated 0-tool-call responses). Each prompt must name its guideline by absolute path (Read it IN FULL — the fallback agent does need to open it here, since there is no script to hand it a pre-resolved path list), give the in-scope files for that guideline, apply only that one guideline, and end with this output contract as the entire final message — nothing before or after:
 
 ```json
 {"file":"relative/path.go","line":42,"symbol":"NewStore","rule":"<guideline stem>","severity":"error|warning|info","confidence":"high|medium","description":"what is wrong, specifically","suggestedFix":"before -> after"}

@@ -1,6 +1,7 @@
 ---
 name: ts-quality-checker
 description: Read-only TypeScript quality checker. Applies exactly ONE ts-check guideline to a fixed list of TypeScript files and returns findings as a JSON array. Restricted toolset keeps its injected context minimal so it is far less likely to derail than a general-purpose sub-agent. Used by the ts-check skill's fan-out.
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: ts-check
 description: Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files and report violations with file:line and fixes. Dispatches one focused read-only agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable). USE WHEN working with TypeScript code and you want a comprehensive quality pass.
+model: opus
 ---
 
 # TypeScript Quality Check — Orchestrator
@@ -99,11 +100,11 @@ Workflow({
 })
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent, capped at 4 concurrent, retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent **pinned to `model: "opus"`** (a weaker inherited model degrades these checks invisibly — a shallow read returns `[]`, indistinguishable from a clean pass), capped at 4 concurrent, retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
 
 **Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
-Dispatch each guideline to its own `claude-skills:ts-quality-checker` agent — the **same restricted agent** used by the primary path, not `general-purpose`, so the read-only guarantee holds even without the script — **at most 4 at a time, awaiting each batch before the next**. Each prompt must name its guideline by absolute path (Read it IN FULL — the fallback agent does need to open it here, since there is no script to hand it a pre-resolved path list), give the in-scope files, apply only that one guideline, and end with this output contract as the entire final message — nothing before or after:
+Dispatch each guideline to its own `claude-skills:ts-quality-checker` agent **with `model: "opus"`** — the **same restricted agent** used by the primary path, not `general-purpose`, so the read-only guarantee holds even without the script — **at most 4 at a time, awaiting each batch before the next**. Each prompt must name its guideline by absolute path (Read it IN FULL — the fallback agent does need to open it here, since there is no script to hand it a pre-resolved path list), give the in-scope files, apply only that one guideline, and end with this output contract as the entire final message — nothing before or after:
 
 ```json
 {"file":"relative/path.ts","line":42,"rule":"<guideline stem>","description":"what is wrong, specifically","suggestedFix":"before -> after"}
