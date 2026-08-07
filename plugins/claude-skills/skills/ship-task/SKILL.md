@@ -1,20 +1,31 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — lead-orchestrator plans and implements via planner (fable) and fast-worker (sonnet), then a dedicated xhigh/opus code review runs, deep-reasoner (opus) designs an auto-approved fix plan, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. REQUIRES a task description. Use when the user invokes /ship-task.
+description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (fable) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs an auto-approved fix plan, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
 argument-hint: "[what you want shipped]"
 ---
 
 # Ship Task
 
 Take a task from description to an open, described PR through the existing agent team:
-`lead-orchestrator` (fable) plans and implements via `planner` (fable) and `fast-worker`
-(sonnet); a dedicated code review runs at xhigh effort on opus; `deep-reasoner` (opus)
-designs an auto-approved fix plan; `fast-worker` applies it; `deep-reasoner` verifies;
-then `/git-commit` → `/draft-pr` → `/update-pr-description` ship it.
+`planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
+(fable) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
+code review runs at xhigh effort on opus; `deep-reasoner` designs an auto-approved fix
+plan; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
+`/draft-pr` → `/update-pr-description` ship it.
 
-**This skill spans many turns** — `lead-orchestrator`'s own plan-approval dialog, and a
-backgrounded `Workflow` review. On any resume, re-read the plan files under
+**This skill spans many turns** — your own plan-approval dialog in Phase 1, and a
+backgrounded `Workflow` review in Phase 2. On any resume, re-read the plan files under
 `.claude/plans/` referenced below rather than trusting what's still in context.
+
+**The approval gate is yours, not the planner's.** Subagents have no `ExitPlanMode` tool:
+the harness discards `permissionMode` from plugin agent frontmatter, and it only grants
+`ExitPlanMode` to an agent whose own definition declares plan mode. So `planner` returns
+plan *text* and you present it. Do not delegate the gate downward — it will silently
+degrade into "here is a plan, pending approval" with nothing gating it.
+
+**This skill's phases supersede the harness's generic plan-mode workflow reminder.** Do
+not run its Explore/Plan phases and do not call `ExitPlanMode` with a plan of your own —
+the plan comes from `claude-skills:planner`.
 
 ## The request
 
@@ -31,25 +42,74 @@ If the request above is empty, ask the user what they want shipped and STOP.
    diffs need to be attributed.
 3. Determine `BASE_BRANCH`: `gh pr view --json baseRefName --jq '.baseRefName'`; if that
    fails (no PR yet), use `main`.
+4. Check the permission mode. Phase 1's gate is `ExitPlanMode`, which the harness rejects
+   unless the session is in plan mode — so this skill is meant to be invoked **from plan
+   mode**. If it is not, call `EnterPlanMode` (main-thread only; it throws in agent
+   contexts) before Phase 1b. If that is unavailable or the user declines, fall back to
+   the `AskUserQuestion` gate described in Phase 1f and say plainly that the richer
+   approval dialog was unavailable. Never skip the gate because the tool was missing —
+   that is the exact failure this design exists to prevent.
 
-## Phase 1 — Plan and implement (delegate to `lead-orchestrator`)
+## Phase 1 — Plan, gate, implement
 
-Spawn `claude-skills:lead-orchestrator` with `model: "fable"` and
+Do not research, plan, or implement anything yourself. You draft through `planner`, own
+the approval dialog, and implement through `lead-orchestrator`.
+
+**1a — Draft.** Spawn `claude-skills:planner` with `model: "fable"` and
+`run_in_background: false`. Subagents see nothing of this conversation, so the prompt must
+be self-contained: the request verbatim, the current working directory, and `BASE_BRANCH`.
+It returns the complete plan document as text — there is no file to read.
+
+**1b — Gate.** `ExitPlanMode` is a deferred tool and it takes **no plan parameter** in
+this build: it reads the plan from the plan file the harness designates in the plan-mode
+system message. So, in order:
+
+1. `ToolSearch({ query: "select:ExitPlanMode", max_results: 1 })` to load its schema.
+2. Write the planner's returned document verbatim to that designated plan file. In plan
+   mode it is the one file you are allowed to write.
+3. Call `ExitPlanMode` with no arguments.
+
+The harness renders the approval dialog and owns the approve / auto-accept-edits /
+reject-with-feedback loop.
+
+**1c — Iterate.** On rejection with feedback, re-spawn `planner` with the previous plan
+plus the feedback verbatim, overwrite the same designated plan file, and call
+`ExitPlanMode` again. Repeat until approved. Rejection does not leave plan mode and the
+designated path is stable for the session, so this loop is safe to run as many times as
+the user wants. If the returned plan's first section is `## Open questions`, that is the
+planner asking — the user answers by choosing "No, keep planning" and typing answers,
+which reach you as rejection feedback.
+
+**1d — Save.** Only after approval, copy the approved plan into the project at
+`.claude/plans/<YYYY-MM-DD>-<slug>.md` (`date +%Y-%m-%d`; create the directory if needed).
+The order matters: before approval the only file you may write is the harness's designated
+plan file from 1b. Record this path — Phases 3 and 5 need it, and it is what the lead
+reads.
+
+**1e — Implement.** Spawn `claude-skills:lead-orchestrator` with `model: "fable"` and
 `run_in_background: false` (the `Agent` tool backgrounds by default — this call must
-block, since Phase 2 needs the finished diff). Prompt is self-contained: the request
-verbatim, the current working directory, and `BASE_BRANCH`. Do not plan or implement
-anything yourself — the lead owns everything through its own Phase 4: it spawns
-`claude-skills:planner` first (which presents the plan for approval via the interactive
-`ExitPlanMode` dialog — that IS this pipeline's clarify-until-approved step), executes
-the plan's waves via `fast-worker`/`deep-reasoner`, runs its own Phase 3 self-review, and
-verifies its success checklist.
+block, since Phase 2 needs the finished diff). Self-contained prompt: the request
+verbatim, the current working directory, `BASE_BRANCH`, and the approved plan path from
+1d, stating that the plan is already user-approved so its Phase 1 is satisfied. The lead
+owns everything through its own Phase 4: it executes the plan's waves via
+`fast-worker`/`deep-reasoner`, runs its own Phase 3 self-review, and verifies its success
+checklist.
 
-Read the lead's final message in full. Record:
-- the plan file path (`.claude/plans/...`) — Phase 3 below hands it to `deep-reasoner`;
-- the list of files changed.
+Read the lead's final message in full and record the list of files changed. If it reports
+an unresolved checklist item, do not treat that as fatal here — Phase 2's dedicated review
+independently re-examines the same diff regardless.
 
-If the lead reports an unresolved checklist item, do not treat that as fatal here —
-Phase 2's dedicated review independently re-examines the same diff regardless.
+**1f — Re-plan.** If the lead's final message starts with `REPLAN NEEDED`, it stopped
+mid-flight because reality contradicted the plan. Print the revised plan document it
+returned to the user in full, then gate it with `AskUserQuestion`: *Approve revised plan*
+/ *Revise (type notes)* / *Abort pipeline*.
+
+This gate is `AskUserQuestion`, not `ExitPlanMode`: approval in 1b already took the
+session out of plan mode, so a second `ExitPlanMode` call would fail validation for the
+same reason this whole design exists. On approve, overwrite the plan file from 1d and
+re-spawn the lead with that path plus the lead's completed-work summary. On revise, hand
+the notes to `planner` and re-gate. Allow at most **two** re-plan rounds, then stop and
+report where it stalled.
 
 ## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
 
