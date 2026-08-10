@@ -4,7 +4,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **18 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, and end-to-end task implementation.
+- **19 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, and end-to-end task implementation.
 - **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
@@ -92,6 +92,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `refactor-safely` | Plan/execute refactors using dependency analysis † |
 | `review-changes` | Risk-aware code review via change detection + impact † |
 | `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
+| `compact-comments` | Rewrite verbose comments into succinct 1-2 line comments. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
 | `ship-task` | Ship one task end to end: `lead-orchestrator` plans/implements via `planner` (fable) and `fast-worker` (sonnet), a dedicated opus code review runs, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, `deep-reasoner` verifies, and the result is committed with a draft PR |
 
