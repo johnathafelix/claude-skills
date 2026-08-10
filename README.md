@@ -5,7 +5,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
 - **16 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, and end-to-end task implementation.
-- **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the `plan-and-implement-task` team: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
+- **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **6 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
 ## Setup
@@ -81,7 +81,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `merge` | Merge the PR base into your branch, resolve conflicts, verify, push |
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
-| `plan-and-implement-task` | Implement one task end to end: user-approved plan (plan mode), wave-scheduled implementation by a fable/opus/sonnet agent team, final lead code review |
+| `plan-and-implement-task` | Implement one task end to end: the skill gates the planner's draft through the interactive plan-approval dialog (run it from plan mode), then a fable/opus/sonnet agent team runs the wave-scheduled implementation and a final lead code review |
 | `tdd` | Test-driven development (red-green-refactor) |
 | `write-pending-unit-tests` | Write tests for files changed vs. the base branch |
 | `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
