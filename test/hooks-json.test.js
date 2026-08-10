@@ -1,20 +1,23 @@
 // Locks the Stop-hook registration invariants. These are asserted mechanically
 // because they are load-bearing and invisible: nothing in the hook sources
-// enforces the order, and the one comment that documents it can go stale.
-const test = require('node:test');
-const assert = require('node:assert');
-const fs = require('fs');
-const path = require('path');
+// enforces which hooks are registered or in what order, and the README table
+// that describes it can go stale.
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("fs");
+const path = require("path");
 
-const PLUGIN = path.join(__dirname, '..', 'plugins', 'claude-skills');
-const HOOKS = path.join(PLUGIN, 'hooks');
+const PLUGIN = path.join(__dirname, "..", "plugins", "claude-skills");
+const HOOKS = path.join(PLUGIN, "hooks");
 
-const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+const config = JSON.parse(
+  fs.readFileSync(path.join(HOOKS, "hooks.json"), "utf8"),
+);
 
 // hooks.json nests hooks inside matcher groups, so every assertion below starts
 // by flattening the groups for one event.
 function registered(event) {
-  return config.hooks[event].flatMap(group => group.hooks);
+  return config.hooks[event].flatMap((group) => group.hooks);
 }
 
 function basenames(event) {
@@ -25,75 +28,73 @@ function basenames(event) {
   });
 }
 
-test('Stop hooks run in the documented order', () => {
-  // format-with-prettier MUST stay last: it never blocks, so it is the only hook
-  // guaranteed to run on the final Stop of a continuation chain, which is what
-  // makes it the last thing to touch the files. Reordering silently breaks that.
-  assert.deepStrictEqual(basenames('Stop'), [
-    'auto-code-simplifier.js',
-    'enforce-golang-check.js',
-    'enforce-ts-check.js',
-    'format-with-prettier.js',
+test("Stop hooks are registered in the order the README documents", () => {
+  assert.deepStrictEqual(basenames("Stop"), [
+    "auto-code-simplifier.js",
+    "enforce-golang-check.js",
+    "enforce-ts-check.js",
   ]);
 });
 
-test('every registered hook command points at a file that exists', () => {
+test("every registered hook command points at a file that exists", () => {
   for (const event of Object.keys(config.hooks)) {
     for (const base of basenames(event)) {
       assert.ok(
         fs.existsSync(path.join(HOOKS, base)),
-        event + ' registers ' + base + ', which does not exist',
+        event + " registers " + base + ", which does not exist",
       );
     }
   }
 });
 
-test('every registered hook declares a timeout', () => {
+test("every registered hook declares a timeout", () => {
   for (const event of Object.keys(config.hooks)) {
     for (const h of registered(event)) {
-      assert.strictEqual(typeof h.timeout, 'number', h.command + ' has no numeric timeout');
-      assert.ok(h.timeout > 0, h.command + ' has a non-positive timeout');
+      assert.strictEqual(
+        typeof h.timeout,
+        "number",
+        h.command + " has no numeric timeout",
+      );
+      assert.ok(h.timeout > 0, h.command + " has a non-positive timeout");
     }
   }
 });
 
-test('format-with-prettier has NO stop_hook_active guard', () => {
-  // Deliberate, and load-bearing for the ordering guarantee above. Its own
-  // header comment says "do NOT add the guard back". This test is the mechanism
-  // that makes that comment true.
-  const src = fs.readFileSync(path.join(HOOKS, 'format-with-prettier.js'), 'utf8');
-
-  assert.ok(
-    !/if\s*\(\s*input\.stop_hook_active\s*\)/.test(src),
-    'format-with-prettier.js gained a stop_hook_active guard — this breaks the ordering guarantee documented in its header',
-  );
-});
-
-test('auto-code-simplifier keeps its stop_hook_active guard', () => {
+test("auto-code-simplifier keeps its stop_hook_active guard", () => {
   // Not in scope for the enforce-hook rework; if it ever loses this guard it
   // gains an unbounded continuation loop.
-  const src = fs.readFileSync(path.join(HOOKS, 'auto-code-simplifier.js'), 'utf8');
+  const src = fs.readFileSync(
+    path.join(HOOKS, "auto-code-simplifier.js"),
+    "utf8",
+  );
 
   assert.ok(
     /if\s*\(\s*input\.stop_hook_active\s*\)/.test(src),
-    'auto-code-simplifier.js lost its stop_hook_active guard',
+    "auto-code-simplifier.js lost its stop_hook_active guard",
   );
 });
 
-test('hooks subtree stays pinned to commonjs', () => {
+test("hooks subtree stays pinned to commonjs", () => {
   // The nearest package.json for everything under hooks/ — including hooks/lib/.
   // The root package.json deliberately omits "type"; if this file were removed,
   // require() in the hooks would break the moment the root gained "type":"module".
-  const pkg = JSON.parse(fs.readFileSync(path.join(HOOKS, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(HOOKS, "package.json"), "utf8"),
+  );
 
-  assert.strictEqual(pkg.type, 'commonjs');
+  assert.strictEqual(pkg.type, "commonjs");
 });
 
-test('root package.json does not declare a module type', () => {
+test("root package.json does not declare a module type", () => {
   // skills/*/workflow.js are ESM-syntax but never loaded by Node's resolver;
   // the root is nonetheless their nearest manifest. Omitting "type" preserves
   // today's behavior exactly. See the comment in package.json.
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+  );
 
-  assert.ok(!('type' in pkg), 'root package.json declared a "type" — see test comment');
+  assert.ok(
+    !("type" in pkg),
+    'root package.json declared a "type" — see test comment',
+  );
 });

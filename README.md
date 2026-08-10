@@ -4,9 +4,9 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **16 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, and end-to-end task implementation.
+- **18 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, and end-to-end task implementation.
 - **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
-- **6 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
+- **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
 
 ## Setup
 
@@ -92,6 +92,8 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `refactor-safely` | Plan/execute refactors using dependency analysis † |
 | `review-changes` | Risk-aware code review via change detection + impact † |
 | `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
+| `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
+| `ship-task` | Ship one task end to end: `lead-orchestrator` plans/implements via `planner` (fable) and `fast-worker` (sonnet), a dedicated opus code review runs, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, `deep-reasoner` verifies, and the result is committed with a draft PR |
 
 ### Hooks
 
@@ -102,13 +104,12 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
 | `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` to actually **report** before finishing |
 | `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` to actually **report** before finishing |
-| `format-with-prettier.js` | Stop | Formats changed files with `prettier --write`, last in the turn, in every project — a prettier config is optional |
 
 The two `enforce-*` hooks share their state machine in `hooks/lib/enforce-check.js`; each hook file is just a config block. They check for a terminal task notification representing a real pass, not merely that the skill was dispatched — the checks run asynchronously, so a task ID alone would let the findings vanish. Each hook blocks at most 3 times per turn, and never blocks while a run is still in flight.
 
 The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files.
 
-`format-with-prettier.js` needs no per-project opt-in: it formats every changed file with a prettier-supported extension, skipping only `.claude/` and temp trees. A project's prettier config (`.prettierrc*`, `prettier.config.*`, `package.json#prettier`) is no longer a gate — it only decides which directory prettier runs from, which in turn picks a project-local prettier binary over the `npx` cache and roots `.gitignore`/`.prettierignore` resolution. A project without one gets prettier's defaults, still narrowed by its `.editorconfig`. Its 30s `hooks.json` timeout is shared across all roots in one turn; anything left when the budget runs out is reported, not silently dropped. It counts only the files prettier actually rewrote, so a turn that touched none stays silent.
+The `format-prettier` skill (see Skills, above) runs `prettier --write` on given files, one run per project root — walking up from each file to the nearest prettier config (`.prettierrc*`, `prettier.config.*`, `.prettierignore`, `package.json#prettier`) or else the repo root. Running from that root picks a project-local prettier binary over the `npx` cache and roots `.gitignore`/`.prettierignore` resolution. A repo with **no** prettier config is skipped by default — Claude auto-invokes the skill only when a config is present, and formats an unconfigured repo only when explicitly asked, via `--force`. It counts as formatted only the files prettier actually rewrote — already-clean files are reported separately, and files `.prettierignore` excludes aren't counted at all.
 
 ## Dependencies & caveats
 
@@ -131,7 +132,7 @@ Do all five, in order:
 4. **Re-verify.** The newest cache directory should now match `HEAD`, and every file you changed should be present under it — in particular new files in `agents/` and each `skills/*/workflow.js`, which the cache does not synthesize.
 5. **Read the `<usage>` block of the task notification, not just `<status>`.** `<status>completed</status>` coexists with total failure: it means the workflow script returned, not that the work succeeded, and `agent_count` counts spawn attempts rather than successes. A run is a real pass only when `agents_error` is `0`, `agents_done` equals `agent_count`, and `unverified` is empty. `agents_error == agent_count` with `tool_uses: 0` means the agent type did not resolve — go back to step 1.
 
-`npm test` covers the Stop hooks only (zero dependencies, `node --test`). Hook changes are subject to the same cache rule, so a passing suite is necessary but not sufficient — a hook edit still needs steps 2–4 before it runs live.
+`npm test` covers the Stop hooks and the `format-prettier` skill script (zero dependencies, `node --test`). Both are subject to the same cache rule, so a passing suite is necessary but not sufficient — an edit to either still needs steps 2–4 before it runs live.
 
 ## Recommended plugins
 
