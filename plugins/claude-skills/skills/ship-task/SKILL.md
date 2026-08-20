@@ -1,6 +1,6 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (fable) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs an auto-approved fix plan, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
+description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs an auto-approved fix plan, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
 argument-hint: "[what you want shipped]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "[what you want shipped]"
 
 Take a task from description to an open, described PR through the existing agent team:
 `planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
-(fable) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
+(opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
 code review runs at xhigh effort on opus; `deep-reasoner` designs an auto-approved fix
 plan; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
 `/draft-pr` → `/update-pr-description` ship it.
@@ -86,7 +86,7 @@ The order matters: before approval the only file you may write is the harness's 
 plan file from 1b. Record this path — Phases 3 and 5 need it, and it is what the lead
 reads.
 
-**1e — Implement.** Spawn `claude-skills:lead-orchestrator` with `model: "fable"` and
+**1e — Implement.** Spawn `claude-skills:lead-orchestrator` with `model: "opus"` and
 `run_in_background: false` (the `Agent` tool backgrounds by default — this call must
 block, since Phase 2 needs the finished diff). Self-contained prompt: the request
 verbatim, the current working directory, `BASE_BRANCH`, and the approved plan path from

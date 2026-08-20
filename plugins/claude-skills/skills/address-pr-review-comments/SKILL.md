@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (fable) implements it, a dedicated xhigh/opus code review runs on the new code, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
+description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -14,7 +14,7 @@ mistake into the codebase, so nothing gets planned until it survives verificatio
 The pipeline: fetch the unresolved threads → a fable verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
-(fable) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan →
+(opus) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan →
 `fast-worker` applies → `/git-commit` → push → `/update-pr-description` → one short reply
 per thread.
 
@@ -224,9 +224,9 @@ rejection feedback.
 `.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes.md` (`date +%Y-%m-%d`; create the
 directory if needed). Record this path — Phases 6 and 7 need it.
 
-## Phase 5 — Implement (`lead-orchestrator`, fable)
+## Phase 5 — Implement (`lead-orchestrator`, opus)
 
-Spawn `claude-skills:lead-orchestrator` with `model: "fable"` and
+Spawn `claude-skills:lead-orchestrator` with `model: "opus"` and
 `run_in_background: false` (the `Agent` tool backgrounds by default — this must block,
 since Phase 6 needs the finished diff). Self-contained prompt: the approved plan path from
 4d, the current working directory, `BASE_BRANCH`, and a note that the plan is already
