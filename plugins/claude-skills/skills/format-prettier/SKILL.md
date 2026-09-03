@@ -2,7 +2,7 @@
 name: format-prettier
 description: Format files with prettier. Use PROACTIVELY right after editing files in a repo that declares prettier (.prettierrc*, prettier.config.*, .prettierignore, or prettier in package.json) — pass the files you just edited. Also use whenever the user asks to format code, run prettier, or invokes /format-prettier. In a repo with NO prettier config, never run this on your own; run it only when the user explicitly asks.
 allowed-tools: Bash
-model: claude-sonnet
+model: sonnet
 argument-hint: [files or directories]
 ---
 

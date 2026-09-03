@@ -2,7 +2,7 @@
 name: compact-comments
 description: Triage every comment added in the current PR — delete the ones that only restate the code, compact the rest into succinct, objective 1-2 line comments that keep the essence. Use PROACTIVELY right after you add or expand comments in source files — pass the files you just edited. Also use whenever the user asks to shorten, tighten, or compact comments, to remove redundant or obvious comments, or invokes /compact-comments. Scope is comments ADDED in the current PR; widen to pre-existing comments only when the user explicitly asks.
 allowed-tools: Bash, Read, Edit, Grep, Glob
-model: claude-sonnet
+model: sonnet
 argument-hint: [files, or "all" for pre-existing comments too]
 ---
 

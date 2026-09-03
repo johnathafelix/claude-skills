@@ -2,7 +2,7 @@
 name: merge
 description: Merge the PR's base branch into the current branch, resolve any conflicts, verify tests pass, commit the merge via /git-commit, and push. Use when the user wants to bring their feature branch up to date with its PR base.
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Skill
-model: claude-sonnet
+model: sonnet
 ---
 
 # Merge Skill

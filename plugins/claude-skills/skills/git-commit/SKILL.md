@@ -2,7 +2,7 @@
 name: git-commit
 description: Commit staged or unstaged changes with conventional commit messages. Use whenever a git commit is created — when the user asks to commit/save changes, AND proactively whenever you create a commit yourself as part of a larger task (e.g. "fix X and commit", or after finishing work). Always route commits through this skill rather than running `git commit` directly.
 allowed-tools: Bash, Read, Glob, Grep
-model: claude-sonnet
+model: sonnet
 argument-hint: [files or message hint]
 ---
 
