@@ -93,9 +93,17 @@ guidelines = [                              # keep this order; see the note belo
 
 **Primary path — `Workflow`:**
 
+`Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the working directory or a directory added to the session. When this skill is installed as a plugin its `workflow.js` lives under `~/.claude/plugins/cache/...`, which is neither, so passing that path directly fails with *"scriptPath must be a script path this tool returned, or a file you can already read"*. Copy it into the session scratchpad directory (the absolute path is given in your environment) and dispatch from there — not into the user's repo, where it would show up as an untracked file in their working tree. `workflow.js` sits **alongside this SKILL.md**, one level above the `guidelines/` directory resolved in Step 2 — derive it from that same `$G`, and substitute the real absolute paths for `$G` and `<scratchpad>` (the latter is the scratchpad directory named in your environment) before running the copy:
+
+```bash
+cp "$(dirname '$G')/workflow.js" "<scratchpad>/ts-check-workflow.js"
+```
+
+If the session declares no scratchpad directory, read `workflow.js` in full and pass its contents as `script` instead of `scriptPath` — that path has no directory dependency at all. This is the one file this skill may read into context (~475 lines): it is the script being executed, not a guideline body, so it does not reintroduce the reads Step 2 forbids.
+
 ```
 Workflow({
-  scriptPath: "<absolute dir from Step 2>/workflow.js",
+  scriptPath: "<scratchpad>/ts-check-workflow.js",
   args: { guidelines, files, changeNote: "<one-line note of what changed>" },
 })
 ```

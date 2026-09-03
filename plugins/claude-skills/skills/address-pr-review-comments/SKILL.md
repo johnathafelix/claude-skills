@@ -128,9 +128,25 @@ threshold `investigate-issue` uses before touching more than 10 repos.
 
 ## Phase 2 — Verify (nested `Workflow`, fable + adversarial challenge)
 
+**Stage the script first.** `Workflow` rejects a `scriptPath` it did not itself return
+unless the file sits under the working directory or a directory added to the session.
+Installed as a plugin, this skill's scripts live under `~/.claude/plugins/cache/...`,
+which is neither, so passing that path directly fails with *"scriptPath must be a script
+path this tool returned, or a file you can already read"*. Copy the script into the
+session scratchpad directory (the absolute path is given in your environment) and
+dispatch from there — never into the user's repo, whose working tree this skill inspects
+with `git ls-files --others` in Phase 6:
+
+```bash
+cp "<absolute dir of this SKILL.md>/verify-workflow.js" "<scratchpad>/verify-workflow.js"
+```
+
+If the session declares no scratchpad directory, read the script in full and pass its
+contents as `script` instead of `scriptPath` — that has no directory dependency at all.
+
 ```
 Workflow({
-  scriptPath: "<absolute dir of this SKILL.md>/verify-workflow.js",
+  scriptPath: "<scratchpad>/verify-workflow.js",
   args: { threads: [...], siblingRoot: SIBLING_ROOT, org: ORG, baseBranch: BASE_BRANCH, prNumber: PR_NUMBER },
 })
 ```
@@ -260,15 +276,22 @@ to Phase 8.
 Otherwise dispatch `ship-task`'s reviewer — it is already generic over its args, so this
 skill reuses it rather than carrying a second copy:
 
+Stage it in the scratchpad the same way as Phase 2 — the plugin-cache path is rejected by
+`Workflow` on its own:
+
+```bash
+cp "<absolute dir of this SKILL.md>/../ship-task/workflow.js" "<scratchpad>/ship-task-workflow.js"
+```
+
 ```
 Workflow({
-  scriptPath: "<absolute dir of this SKILL.md>/../ship-task/workflow.js",
+  scriptPath: "<scratchpad>/ship-task-workflow.js",
   args: { files: <the diff list>, baseBranch: BASE_BRANCH, changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
 })
 ```
 
-Normalize that path to an absolute one before the call rather than leaving `..` for the
-runtime to resolve. Wait for the completion notification, then read
+Normalize the source path to an absolute one before the `cp` rather than leaving `..` for
+the runtime to resolve. Wait for the completion notification, then read
 `{ findings, findingCount, dimensionsUnverified }`. Report any `dimensionsUnverified`
 plainly later — an unverified dimension is not a clean pass on it. If `findingCount` is 0,
 log a clean review and skip to Phase 8.

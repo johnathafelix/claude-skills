@@ -129,11 +129,28 @@ Dedupe the two lists into one `files` array.
 
 If that combined list is empty, log that there is nothing to review and skip to Phase 5.
 
-Otherwise dispatch:
+Otherwise stage the script somewhere `Workflow` will accept, then dispatch.
+
+`Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the
+working directory or a directory added to the session. When this skill is installed as a
+plugin its `workflow.js` lives under `~/.claude/plugins/cache/...`, which is neither, so
+passing that path directly fails with *"scriptPath must be a script path this tool
+returned, or a file you can already read"*. Copy it into the session scratchpad
+directory (the absolute path is given in your environment) and dispatch from there:
+
+```bash
+cp "<absolute dir of this SKILL.md>/workflow.js" "<scratchpad>/ship-task-workflow.js"
+```
+
+Do **not** copy it into the user's repo instead: an untracked file there would be picked
+up by the diff scouting above and reviewed as if it were part of the change. If the
+session declares no scratchpad directory, read `workflow.js` in full and pass its
+contents as `script` instead of `scriptPath` — that path has no directory dependency at
+all, at the cost of ~3k tokens in this context.
 
 ```
 Workflow({
-  scriptPath: "<absolute dir of this SKILL.md>/workflow.js",
+  scriptPath: "<scratchpad>/ship-task-workflow.js",
   args: { files: <the diff list>, baseBranch: BASE_BRANCH, changeNote: "<one-line summary of the lead's Outcome>", planPath: "<Phase 1 plan path>" },
 })
 ```
