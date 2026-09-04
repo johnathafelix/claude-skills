@@ -86,20 +86,81 @@ The order matters: before approval the only file you may write is the harness's 
 plan file from 1b. Record this path — Phases 3 and 5 need it, and it is what the lead
 reads.
 
-**1e — Implement.** Spawn `claude-skills:lead-orchestrator` with `model: "opus"` and
-`run_in_background: false` (the `Agent` tool backgrounds by default — this call must
-block, since Phase 2 needs the finished diff). Self-contained prompt: the request
-verbatim, the current working directory, `BASE_BRANCH`, and the approved plan path from
-1d, stating that the plan is already user-approved so its Phase 1 is satisfied. The lead
-owns everything through its own Phase 4: it executes the plan's waves via
-`fast-worker`/`deep-reasoner`, runs its own Phase 3 self-review, and verifies its success
-checklist.
+**1e — Implement, polling the lead.** Spawn `claude-skills:lead-orchestrator` with
+`model: "opus"`, a `name` (use `lead`), and **in the background** (`run_in_background:
+true` — the `Agent` tool backgrounds by default). Background is required here: you are
+going to poll the lead, and a blocking `run_in_background: false` spawn would freeze this
+thread until the lead finished, leaving no turn in which to poll or to notice a stall.
+Phase 2 still gets the finished diff — you do not proceed to it until the poll loop below
+sees the lead signal completion.
 
-Read the lead's final message in full and record the list of files changed. If it reports
-an unresolved checklist item, do not treat that as fatal here — Phase 2's dedicated review
-independently re-examines the same diff regardless.
+Self-contained prompt: the request verbatim, the current working directory, `BASE_BRANCH`,
+the approved plan path from 1d (state that the plan is already user-approved so its Phase 1
+is satisfied), and this instruction verbatim. Record the `agentId` the spawn returns:
+address polls to `lead` by name, and fall back to that id if a name-addressed
+`SendMessage` ever errors.
 
-**1f — Re-plan.** If the lead's final message starts with `REPLAN NEEDED`, it stopped
+> You run in the background and I will poll you with `STATUS POLL` messages — answer each
+> briefly and keep working. When you are fully done, `SendMessage` `main` your final report
+> beginning with the line `IMPLEMENTATION COMPLETE` (or `REPLAN NEEDED` on the re-plan
+> path). That message is what releases me.
+
+The lead owns everything through its own Phase 4: it executes the plan's waves via
+`fast-worker`/`deep-reasoner` (blocking on each wave with `run_in_background: false`), runs
+its own Phase 3 self-review, and verifies its success checklist.
+
+Then run this poll loop until the lead signals completion. Load the deferred tools first:
+`ToolSearch({ query: "select:Monitor,SendMessage,TaskStop", max_results: 3 })`. If the
+select does not return `TaskStop` (Task tools can be gated off by default on some models),
+run the loop anyway — just stop acting on ticks once the lead completes; a stray persistent
+heartbeat is harmless and ends with the session.
+
+1. **Arm the heartbeat** — one persistent `Monitor` that ticks on a fixed cadence:
+
+   ```
+   Monitor({ command: "while true; do sleep 150; echo tick; done", description: "ship-task lead poll heartbeat", persistent: true })
+   ```
+
+   A `Monitor` survives a forgotten re-arm, unlike a one-shot background `sleep`; one tick
+   every ~150s is well below Monitor's rate-limit auto-stop.
+
+   Each tick and each lead message is a separate turn, so the stall guard needs **durable
+   state**, not memory: keep a running log at `<scratchpad>/ship-task-poll-state.tsv` and
+   append to it on every tick and every lead message. Without this a future turn has nothing
+   to compare against and the guard silently never fires.
+
+2. **On each `tick`**, in one turn:
+   - Read ground truth. `git status --porcelain` is the guard's signal — it is fetch-free
+     and reliable here. `git diff --stat origin/$BASE_BRANCH` and
+     `git ls-files --others --exclude-standard` are for visibility only, and the diffstat may
+     be stale until Phase 2's `git fetch` runs, so do not key the guard on it.
+     ```bash
+     git status --porcelain
+     git ls-files --others --exclude-standard
+     git diff --stat origin/$BASE_BRANCH   # visibility only; may be stale pre-fetch
+     ```
+   - Append one row to the state file: `TICK<TAB><epoch><TAB>files=<count of porcelain lines>`.
+   - `SendMessage({ to: "lead", message: "STATUS POLL" })` — drives the lead forward if it
+     is idle, and queues harmlessly if it is blocked inside a wave.
+
+3. **On any message from the lead:** append `MSG<TAB><epoch><TAB><first line>` to the state
+   file, then: if it begins `IMPLEMENTATION COMPLETE`, the run is done — `TaskStop` the
+   heartbeat, record the files changed from that report, and go to Phase 2. If it begins
+   `REPLAN NEEDED`, `TaskStop` the heartbeat and go to **1f**. Anything else is an interim
+   `STATUS:` line — keep polling. The lead's background task-completion notification is an
+   equivalent "done" signal: if it arrives, `TaskStop` the heartbeat and use the final
+   report the lead sent to `main`.
+
+4. **Stall guard.** Read the state file. Escalate to the user **only** when the last **three
+   `TICK` rows show an unchanged `files` count AND no `MSG` row falls after the third-from-
+   last `TICK`** — then `TaskStop` the heartbeat and report the stall plainly, quoting the
+   last status and the frozen file list. Never escalate on lead silence alone: silence
+   during a long wave is normal, which is why an intervening `MSG` row resets the guard.
+
+If the lead's final report flags an unresolved checklist item, do not treat that as fatal
+here — Phase 2's dedicated review independently re-examines the same diff regardless.
+
+**1f — Re-plan.** If the lead's message starts with `REPLAN NEEDED`, it stopped
 mid-flight because reality contradicted the plan. Print the revised plan document it
 returned to the user in full, then gate it with `AskUserQuestion`: *Approve revised plan*
 / *Revise (type notes)* / *Abort pipeline*.
@@ -107,9 +168,9 @@ returned to the user in full, then gate it with `AskUserQuestion`: *Approve revi
 This gate is `AskUserQuestion`, not `ExitPlanMode`: approval in 1b already took the
 session out of plan mode, so a second `ExitPlanMode` call would fail validation for the
 same reason this whole design exists. On approve, overwrite the plan file from 1d and
-re-spawn the lead with that path plus the lead's completed-work summary. On revise, hand
-the notes to `planner` and re-gate. Allow at most **two** re-plan rounds, then stop and
-report where it stalled.
+re-spawn the lead with that path plus the lead's completed-work summary, using the same
+background-spawn and poll loop as 1e. On revise, hand the notes to `planner` and re-gate.
+Allow at most **two** re-plan rounds, then stop and report where it stalled.
 
 ## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
 

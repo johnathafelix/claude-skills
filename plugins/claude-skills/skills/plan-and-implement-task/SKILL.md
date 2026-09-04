@@ -70,22 +70,57 @@ proceed without one.
    needed). The order matters: before approval the only file you may write is the
    harness's designated plan file from step 3.
 
-5. **Implement.** Spawn `claude-skills:lead-orchestrator` (`model: "fable"`,
-   `run_in_background: false`) with the request verbatim, the working directory, and the
-   approved plan path, stating that the plan is already user-approved so its Phase 1 is
-   satisfied. Do NOT implement anything yourself — the lead owns the rest of the
-   lifecycle: it executes the plan's task waves via `claude-skills:deep-reasoner` /
-   `claude-skills:fast-worker` (parallel within a wave, max 5 concurrent; serial across
+5. **Implement, polling the lead.** Spawn `claude-skills:lead-orchestrator`
+   (`model: "fable"`, a `name` of `lead`, and **in the background** —
+   `run_in_background: true`). Background is required so you can poll it; a blocking spawn
+   would freeze this thread with no turn in which to poll or notice a stall. Do NOT
+   implement anything yourself — the lead owns the rest of the lifecycle: it executes the
+   plan's task waves via `claude-skills:deep-reasoner` / `claude-skills:fast-worker`
+   (parallel within a wave with `run_in_background: false`, max 5 concurrent; serial across
    waves), supervises them against the plan, and finishes with its own code review of the
    full change set.
 
-6. **Relay.** When the lead returns, relay its final report to the user: outcome, plan file
-   path, files changed, code-review findings and resolutions, success-checklist
-   verification (with evidence), and deviations. Do not editorialize or re-verify — the
-   report is the deliverable. If the lead reports unverified or failed checklist items,
-   surface them plainly.
+   Self-contained prompt: the request verbatim, the working directory, the approved plan
+   path (state the plan is already user-approved so its Phase 1 is satisfied), and this
+   instruction verbatim. Record the `agentId` the spawn returns and fall back to it if a
+   `to: "lead"` send errors.
 
-7. **Re-plan.** If the lead's final message starts with `REPLAN NEEDED`, it stopped
+   > You run in the background and I will poll you with `STATUS POLL` messages — answer each
+   > briefly and keep working. When you are fully done, `SendMessage` `main` your final
+   > report beginning with the line `IMPLEMENTATION COMPLETE` (or `REPLAN NEEDED` on the
+   > re-plan path). That message is what releases me.
+
+   Then poll until the lead signals completion. Load the deferred tools first:
+   `ToolSearch({ query: "select:Monitor,SendMessage,TaskStop", max_results: 3 })`. If the
+   select does not return `TaskStop` (Task tools can be gated off on some models), run the
+   loop anyway and just stop acting on ticks once the lead completes — a stray heartbeat is
+   harmless and ends with the session.
+
+   The stall guard needs **durable state** (each tick is a separate turn): keep a log at
+   `<scratchpad>/plan-and-implement-poll-state.tsv` and append to it on every tick and lead
+   message.
+
+   - **Arm a heartbeat:**
+     `Monitor({ command: "while true; do sleep 150; echo tick; done", description: "plan-and-implement lead poll heartbeat", persistent: true })`.
+   - **On each `tick`:** read `git status --porcelain` (the guard's fetch-free signal),
+     append `TICK<TAB><epoch><TAB>files=<porcelain line count>` to the state file, then
+     `SendMessage({ to: "lead", message: "STATUS POLL" })`.
+   - **On a lead message:** append `MSG<TAB><epoch><TAB><first line>` to the state file. If
+     it begins `IMPLEMENTATION COMPLETE`, `TaskStop` the heartbeat and go to step 6 with that
+     report. Beginning `REPLAN NEEDED`: `TaskStop` and go to step 7. Anything else is an
+     interim `STATUS:` line — keep polling. The lead's background task-completion
+     notification is an equivalent "done" signal.
+   - **Stall guard:** escalate to the user only when the last three `TICK` rows show an
+     unchanged `files` count AND no `MSG` row falls after the third-from-last `TICK` — never
+     on lead silence alone.
+
+6. **Relay.** When the lead sends its `IMPLEMENTATION COMPLETE` report, relay it to the
+   user: outcome, plan file path, files changed, code-review findings and resolutions,
+   success-checklist verification (with evidence), and deviations. Do not editorialize or
+   re-verify — the report is the deliverable. If the lead reports unverified or failed
+   checklist items, surface them plainly.
+
+7. **Re-plan.** If the lead's message starts with `REPLAN NEEDED`, it stopped
    mid-flight because reality contradicted the plan. Print the revised plan document it
    returned in full, then gate it with `AskUserQuestion`: *Approve revised plan* /
    *Revise (type notes)* / *Abort*.
@@ -93,9 +128,9 @@ proceed without one.
    This gate is `AskUserQuestion`, not `ExitPlanMode`: approval in step 3 already took the
    session out of plan mode, so a second `ExitPlanMode` call would fail validation for the
    same reason this whole design exists. On approve, overwrite the plan file from step 4
-   and re-spawn the lead with that path plus the lead's completed-work summary. On revise,
-   hand the notes to `planner` and re-gate. Allow at most **two** re-plan rounds, then stop
-   and report where it stalled.
+   and re-spawn the lead with that path plus the lead's completed-work summary, using the
+   same background-spawn and poll loop as step 5. On revise, hand the notes to `planner`
+   and re-gate. Allow at most **two** re-plan rounds, then stop and report where it stalled.
 
 ## Notes
 

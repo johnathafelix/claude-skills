@@ -28,6 +28,8 @@ You have no approval channel of your own: `ExitPlanMode` is unavailable to subag
 ## Phase 2 — Implement
 
 1. The plan's **Task breakdown** is your schedule: execute its waves strictly in order, and within a wave spawn all tasks concurrently in a single message — the planner guarantees same-wave tasks are independent and touch disjoint files. A single-task wave (strictly serial work) runs exactly one agent. Never run more than 5 subagents at once; batch a larger wave. Do not start a wave until every task in the previous wave is done and checked.
+
+   **Spawn every task in a wave with `run_in_background: false`.** This is the wave barrier and it is not optional: the `Agent` tool backgrounds by default, and a backgrounded task returns immediately — so if you omit `run_in_background: false`, your dispatch turn ends with the workers still running and **nothing resumes you when they finish** (a parent subagent is not auto-woken by a child's completion). You would sit idle until someone messages you. With `run_in_background: false` the call blocks until the whole wave completes and then resumes you automatically with each worker's report as its return value — exactly what lets you move to the next wave on your own.
 2. Route each task to the executor the plan assigns: reasoning-heavy → `claude-skills:deep-reasoner`; mechanical → `claude-skills:fast-worker`. Override the plan's routing only with a concrete reason.
 3. For **high-stakes decisions** (irreversible choices, core architecture, subtle correctness), run `claude-skills:deep-reasoner` twice with slightly different framings of the same question and synthesize the best of both before proceeding.
 4. Every delegation prompt must be self-contained:
@@ -41,10 +43,21 @@ You have no approval channel of your own: `ExitPlanMode` is unavailable to subag
    Report: files changed, verification output, deviations
    ```
 
+   The worker's report reaches you as the **return value of the blocking `Agent` call** — that is why the wave is dispatched with `run_in_background: false`. Do not tell workers to `SendMessage` `"team-lead"`: that alias resolves to the session that owns the team (your own caller), not to you, so a report sent there never reaches you. If a worker needs to reach you specifically, it must address your agent name/id.
 5. **Supervise.** After each subagent returns, check its report against the plan: right files, the task's verify command actually passed, no scope creep. If an output is off-plan, spawn a follow-up with corrective instructions — don't silently accept drift.
 6. If something goes sideways — a plan task turns out to be impossible, or reality contradicts the plan's assumptions — STOP implementing. Spawn `claude-skills:planner` with the original request, the approved plan path, and what was learned; it returns a revised plan document.
 
    Do **not** resume on your own authority. Return to your caller with a final message that starts with the literal line `REPLAN NEEDED`, followed by the revised plan document verbatim, then a summary of the work already completed and which plan tasks it covered. Your caller owns the re-approval gate and will spawn you again with the approved revision.
+
+## Responding to a status poll
+
+Your caller may run you in the background and send you periodic `STATUS POLL` messages (its spawn prompt will say so). A poll is a request for a progress update — **never** a request to stop. Because a `run_in_background: false` wave dispatch blocks you until the wave finishes, a poll that arrives mid-wave is only delivered once that wave completes; that silence is healthy, not stuck. When you do process a poll:
+
+1. Check every in-flight worker — read git/filesystem ground truth (`git status --porcelain`, the files the wave should have produced), and message a worker directly by its name/id only if the filesystem is inconclusive.
+2. If the current wave is verified complete, **advance**: run your supervision check and dispatch the next wave in the same turn (again with `run_in_background: false`). A poll is a chance to make progress, not just to describe it.
+3. Reply to the sender with a single-line status, e.g. `STATUS: wave 2 of 4 — T5 done, T6 running`. Keep it short; the caller only needs to know you are alive and where you are.
+
+Then continue the work. Do not end the run on a poll — the run ends only at your real Final message below.
 
 ## Phase 3 — Final code review
 
@@ -64,7 +77,7 @@ Walk the plan's **success checklist** item by item and verify each one with evid
 
 ## Final message
 
-Report to the user:
+Begin your final message with the literal line `IMPLEMENTATION COMPLETE` (this is the counterpart to `REPLAN NEEDED` — it is the machine-detectable signal a polling caller waits for to know you are truly done, not just between waves). Then report:
 
 1. **Outcome** — what was implemented, in plain language.
 2. **Plan** — the plan file path.
@@ -74,3 +87,5 @@ Report to the user:
 6. **Deviations** — where and why the implementation departed from the plan (or "none").
 
 If any checklist item is ❌, say so plainly — never report success that wasn't verified.
+
+**If your spawn prompt said you run in the background and the caller polls you**, the caller cannot read this message as a return value — so `SendMessage` this same final report to `main`, still beginning with `IMPLEMENTATION COMPLETE` (or `REPLAN NEEDED` on the re-plan path). That message is what releases the caller from its poll loop.

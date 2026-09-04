@@ -240,21 +240,56 @@ rejection feedback.
 `.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes.md` (`date +%Y-%m-%d`; create the
 directory if needed). Record this path — Phases 6 and 7 need it.
 
-## Phase 5 — Implement (`lead-orchestrator`, opus)
+## Phase 5 — Implement, polling the lead (`lead-orchestrator`, opus)
 
-Spawn `claude-skills:lead-orchestrator` with `model: "opus"` and
-`run_in_background: false` (the `Agent` tool backgrounds by default — this must block,
-since Phase 6 needs the finished diff). Self-contained prompt: the approved plan path from
-4d, the current working directory, `BASE_BRANCH`, and a note that the plan is already
-user-approved so its own Phase 1 is satisfied.
+Spawn `claude-skills:lead-orchestrator` with `model: "opus"`, a `name` of `lead`, and **in
+the background** (`run_in_background: true` — the `Agent` tool backgrounds by default).
+Background is required so you can poll it; a blocking spawn would freeze this thread with
+no turn in which to poll or notice a stall. Phase 6 still gets the finished diff — you do
+not proceed to it until the poll loop below sees the lead signal completion.
 
-Read its final message in full and record the files changed. If it reports an unresolved
-checklist item, that is not fatal here — Phase 6 re-examines the same diff regardless.
+Self-contained prompt: the approved plan path from 4d, the current working directory,
+`BASE_BRANCH`, a note that the plan is already user-approved so its own Phase 1 is
+satisfied, and this instruction verbatim. Record the `agentId` the spawn returns and fall
+back to it if a `to: "lead"` send errors.
 
-If its final message starts with `REPLAN NEEDED`, print the revised plan it returned in
+> You run in the background and I will poll you with `STATUS POLL` messages — answer each
+> briefly and keep working. When you are fully done, `SendMessage` `main` your final report
+> beginning with the line `IMPLEMENTATION COMPLETE` (or `REPLAN NEEDED` on the re-plan
+> path). That message is what releases me.
+
+Then poll until the lead signals completion. Load the deferred tools first:
+`ToolSearch({ query: "select:Monitor,SendMessage,TaskStop", max_results: 3 })`. If the
+select does not return `TaskStop` (Task tools can be gated off on some models), run the loop
+anyway and just stop acting on ticks once the lead completes — a stray heartbeat is harmless
+and ends with the session. The stall guard needs **durable state** (each tick is a separate
+turn): keep a log at `<scratchpad>/address-pr-poll-state.tsv` and append to it on every tick
+and lead message.
+
+- **Arm a heartbeat:**
+  `Monitor({ command: "while true; do sleep 150; echo tick; done", description: "address-pr lead poll heartbeat", persistent: true })`.
+- **On each `tick`:** read `git status --porcelain` (the guard's fetch-free signal;
+  `git diff --stat origin/$BASE_BRANCH` is visibility only and may be stale until Phase 6's
+  fetch), append `TICK<TAB><epoch><TAB>files=<porcelain line count>` to the state file, then
+  `SendMessage({ to: "lead", message: "STATUS POLL" })`.
+- **On a lead message:** append `MSG<TAB><epoch><TAB><first line>` to the state file. If it
+  begins `IMPLEMENTATION COMPLETE`, `TaskStop` the heartbeat, record the files changed, and
+  go to Phase 6. Beginning `REPLAN NEEDED`: `TaskStop` the heartbeat and take the re-plan
+  branch below. Anything else is an interim `STATUS:` line — keep polling. The lead's
+  background task-completion notification is an equivalent "done" signal.
+- **Stall guard:** escalate to the user only when the last three `TICK` rows show an
+  unchanged `files` count AND no `MSG` row falls after the third-from-last `TICK` — never on
+  lead silence alone.
+
+If the lead's final report flags an unresolved checklist item, that is not fatal here —
+Phase 6 re-examines the same diff regardless.
+
+If the lead's message starts with `REPLAN NEEDED`, print the revised plan it returned in
 full and gate it with `AskUserQuestion` (*Approve revised plan* / *Revise (type notes)* /
 *Abort*). This gate is `AskUserQuestion`, not `ExitPlanMode` — approval in 4b already left
-plan mode. Allow at most **two** re-plan rounds, then stop and report where it stalled.
+plan mode. On approve, overwrite the plan file from 4d and re-spawn the lead with the same
+background-spawn and poll loop above. Allow at most **two** re-plan rounds, then stop and
+report where it stalled.
 
 ## Phase 6 — Code review (nested `Workflow`, xhigh + opus)
 
