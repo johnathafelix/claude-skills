@@ -129,7 +129,6 @@ only narrates the code below it goes away entirely.
 
 ## Ordering with other automation
 
-`auto-code-simplifier.js` (Stop hook) can trigger a `code-simplifier` pass after source
-edits, and that pass can add or reword comments. If a code-simplifier pass is also
-pending this turn, run it first — otherwise it can re-inflate what this skill just
-compacted.
+A `code-simplifier` pass (see the `simplify-code` skill) can add or reword comments
+when it runs on the same files. If one is also running this turn, run it first —
+otherwise it can re-inflate what this skill just compacted.

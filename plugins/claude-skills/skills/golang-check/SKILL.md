@@ -1,6 +1,6 @@
 ---
 name: golang-check
-description: USE WHEN reviewing, writing, or refactoring Go code and you want it checked against Go conventions — naming, type/API design (incl. accept interfaces/return structs), functions & signatures, declarations, errors, concurrency, gotchas, modernizers (Go 1.26+ new(expr) & other go fix rewrites), testing, structure, and doc comments. Dispatches one focused agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable) and reports violations with file:line and fixes. Extend by dropping a new file into guidelines/.
+description: Checks Go code against Go conventions — naming, type/API design (incl. accept interfaces/return structs), functions & signatures, declarations, errors, concurrency, gotchas, modernizers (Go 1.26+ new(expr) & other go fix rewrites), testing, structure, and doc comments. Dispatches one focused agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable) and reports violations with file:line and fixes. Use PROACTIVELY before finishing a nontrivial Go change or opening a PR — pass the changed files; skip it for a trivial edit. Also runs directly via /golang-check. Extend by dropping a new file into guidelines/.
 model: opus
 ---
 
@@ -10,7 +10,7 @@ Check changed Go code against the project's Go design guidelines. Each guideline
 
 **This skill reports; it does not edit by default.** Surface findings and let the user decide. Only apply fixes if the user explicitly asks (changing a return type or parameter type can ripple into callers).
 
-**This skill dispatches its check via the `Workflow` tool.** Invoking `/golang-check` is your instruction to call it — no separate confirmation needed. **Dispatching is not the same as finishing:** `Workflow` returns a task ID immediately and the run completes in the background. Do not conclude the turn on that task ID — wait for the completion notification and present its `findings` / `unverified` before you stop, especially if this run was triggered by the `enforce-golang-check.js` Stop hook (it only blocks once per turn, so nothing else will catch a premature stop).
+**This skill dispatches its check via the `Workflow` tool.** Invoking `/golang-check` is your instruction to call it — no separate confirmation needed. **Dispatching is not the same as finishing:** `Workflow` returns a task ID immediately and the run completes in the background. Do not conclude the turn on that task ID — wait for the completion notification and present its `findings` / `unverified` before you stop.
 
 ## Procedure
 

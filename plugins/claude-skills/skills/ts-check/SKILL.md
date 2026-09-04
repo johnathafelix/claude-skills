@@ -1,6 +1,6 @@
 ---
 name: ts-check
-description: Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files and report violations with file:line and fixes. Dispatches one focused read-only agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable). USE WHEN working with TypeScript code and you want a comprehensive quality pass.
+description: Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files and report violations with file:line and fixes. Dispatches one focused read-only agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable). Use PROACTIVELY before finishing a nontrivial TypeScript change or opening a PR — pass the changed files; skip it for a trivial edit. Also runs directly via /ts-check.
 model: opus
 ---
 
@@ -10,7 +10,7 @@ Check changed TypeScript code against the project's quality guidelines. Each che
 
 **This skill reports; it does not edit by default.** Surface findings and let the user decide. Only apply fixes if the user explicitly asks — Step 5 is opt-in.
 
-**This skill dispatches its check via the `Workflow` tool.** Invoking `/ts-check` is your instruction to call it — no separate confirmation needed. **Dispatching is not the same as finishing:** `Workflow` returns a task ID immediately and the run completes in the background. Do not conclude the turn on that task ID — wait for the completion notification and present its `findings` / `unverified` before you stop, especially if this run was triggered by the `enforce-ts-check.js` Stop hook (it only blocks once per turn, so nothing else will catch a premature stop).
+**This skill dispatches its check via the `Workflow` tool.** Invoking `/ts-check` is your instruction to call it — no separate confirmation needed. **Dispatching is not the same as finishing:** `Workflow` returns a task ID immediately and the run completes in the background. Do not conclude the turn on that task ID — wait for the completion notification and present its `findings` / `unverified` before you stop.
 
 ## Procedure
 

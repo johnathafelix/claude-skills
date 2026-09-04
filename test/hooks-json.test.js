@@ -1,7 +1,6 @@
-// Locks the Stop-hook registration invariants. These are asserted mechanically
-// because they are load-bearing and invisible: nothing in the hook sources
-// enforces which hooks are registered or in what order, and the README table
-// that describes it can go stale.
+// Locks hook registration invariants. These are asserted mechanically because
+// they are load-bearing and invisible: a hook can be registered with a broken
+// path or no timeout and nothing in the sources will say so.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
@@ -28,14 +27,6 @@ function basenames(event) {
   });
 }
 
-test("Stop hooks are registered in the order the README documents", () => {
-  assert.deepStrictEqual(basenames("Stop"), [
-    "auto-code-simplifier.js",
-    "enforce-golang-check.js",
-    "enforce-ts-check.js",
-  ]);
-});
-
 test("every registered hook command points at a file that exists", () => {
   for (const event of Object.keys(config.hooks)) {
     for (const base of basenames(event)) {
@@ -58,20 +49,6 @@ test("every registered hook declares a timeout", () => {
       assert.ok(h.timeout > 0, h.command + " has a non-positive timeout");
     }
   }
-});
-
-test("auto-code-simplifier keeps its stop_hook_active guard", () => {
-  // Not in scope for the enforce-hook rework; if it ever loses this guard it
-  // gains an unbounded continuation loop.
-  const src = fs.readFileSync(
-    path.join(HOOKS, "auto-code-simplifier.js"),
-    "utf8",
-  );
-
-  assert.ok(
-    /if\s*\(\s*input\.stop_hook_active\s*\)/.test(src),
-    "auto-code-simplifier.js lost its stop_hook_active guard",
-  );
 });
 
 test("hooks subtree stays pinned to commonjs", () => {

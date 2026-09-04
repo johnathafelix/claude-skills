@@ -1,5 +1,5 @@
 {
-  "description": "Guardrails and post-turn enforcement for git/PR safety and Go/TS quality checks",
+  "description": "Guardrails for git/PR safety",
   "hooks": {
     "PreToolUse": [
       {
@@ -14,27 +14,6 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gh-pr-guard.js\"",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-code-simplifier.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce-golang-check.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce-ts-check.js\"",
-            "timeout": 10
           }
         ]
       }

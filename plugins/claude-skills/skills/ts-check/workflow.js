@@ -359,8 +359,7 @@ if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) 
 // An empty/missing guidelines or files list is never legitimate here —
 // SKILL.md Step 1 already stops on an empty scope, and the guideline list is a
 // fixed 4. Fail loud rather than silently checking nothing and letting the
-// caller report a false "clean" result — for ts-check that would also satisfy
-// enforce-ts-check.js with zero findings ever reported.
+// caller report a false "clean" result.
 const guidelines = parsedArgs.guidelines
 if (!Array.isArray(guidelines) || guidelines.length === 0) {
   throw new Error('ts-check workflow received no guidelines to check — verify the Step 2 args payload')

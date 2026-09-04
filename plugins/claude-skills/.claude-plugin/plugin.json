@@ -1,6 +1,6 @@
 {
   "name": "claude-skills",
-  "description": "A collection of dev-workflow skills (git, PRs, TDD, TypeScript/Go quality checks, REST API review, code-review-graph helpers) plus guardrail hooks for safe commits/PRs and post-turn quality enforcement.",
+  "description": "A collection of dev-workflow skills (git, PRs, TDD, TypeScript/Go quality checks, REST API review, code-review-graph helpers) plus guardrail hooks for safe commits/PRs.",
   "author": {
     "name": "johnathafelix",
     "url": "https://github.com/johnathafelix"

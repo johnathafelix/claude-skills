@@ -4,9 +4,9 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **19 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, and end-to-end task implementation.
+- **20 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, code simplification, and end-to-end task implementation.
 - **6 agents** — `go-idiom-checker` / `ts-quality-checker` (the restricted sub-agents `golang-check` / `ts-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
-- **5 hooks** — guardrails for safe commits/PRs and post-turn quality enforcement.
+- **2 hooks** — guardrails for safe commits/PRs.
 
 ## Setup
 
@@ -31,7 +31,7 @@ To update later (this plugin sets no `version`, so it's tracked by git commit �
 
 ### 2. Required dependency — `code-simplifier`
 
-`claude-skills` declares a hard dependency on the `code-simplifier` plugin — the `auto-code-simplifier.js` Stop hook drives its agent, so the plugin **will not load** without it. It lives in Claude Code's built-in **`claude-plugins-official`** marketplace and is **auto-installed** with `claude-skills`, so on a normal machine there's no extra step.
+`claude-skills` declares a hard dependency on the `code-simplifier` plugin — the `simplify-code` skill dispatches its agent, so the plugin **will not load** without it. It lives in Claude Code's built-in **`claude-plugins-official`** marketplace and is **auto-installed** with `claude-skills`, so on a normal machine there's no extra step.
 
 On a bare setup where `claude-plugins-official` isn't registered yet, the install fails to load with a message like:
 
@@ -94,6 +94,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
+| `simplify-code` | Dispatch the `code-simplifier` agent to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
 | `ship-task` | Ship one task end to end: `lead-orchestrator` plans/implements via `planner` (fable) and `fast-worker` (sonnet), a dedicated opus code review runs, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, `deep-reasoner` verifies, and the result is committed with a draft PR |
 | `address-pr-review-comments` | Address a PR's review comments, verification first: a fable verifier checks each comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
 
@@ -103,19 +104,14 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 |---|---|---|
 | `git-commit-guard.js` | PreToolUse (Bash) | Guards risky `git commit` invocations |
 | `gh-pr-guard.js` | PreToolUse (Bash) | Guards risky `gh pr` invocations |
-| `auto-code-simplifier.js` | Stop | After edits, nudges a `code-simplifier` pass (agent from the required `code-simplifier` dependency) |
-| `enforce-golang-check.js` | Stop | If Go source changed, requires `/golang-check` to actually **report** before finishing |
-| `enforce-ts-check.js` | Stop | If TS source changed, requires `/ts-check` to actually **report** before finishing |
 
-The two `enforce-*` hooks share their state machine in `hooks/lib/enforce-check.js`; each hook file is just a config block. They check for a terminal task notification representing a real pass, not merely that the skill was dispatched — the checks run asynchronously, so a task ID alone would let the findings vanish. Each hook blocks at most 3 times per turn, and never blocks while a run is still in flight.
-
-The `enforce-*` hooks pair with the bundled `golang-check` / `ts-check` skills, so they are self-contained. All hooks no-op quietly when a turn didn't touch relevant files.
+`golang-check`, `ts-check`, and `simplify-code` used to be hook-enforced on every turn that touched relevant source; they're now plain skills Claude invokes at its own judgment (see their descriptions), so nothing here blocks the turn from ending. All three still run directly on request, via `/golang-check`, `/ts-check`, and `/simplify-code`.
 
 The `format-prettier` skill (see Skills, above) runs `prettier --write` on given files, one run per project root — walking up from each file to the nearest prettier config (`.prettierrc*`, `prettier.config.*`, `.prettierignore`, `package.json#prettier`) or else the repo root. Running from that root picks a project-local prettier binary over the `npx` cache and roots `.gitignore`/`.prettierignore` resolution. A repo with **no** prettier config is skipped by default — Claude auto-invokes the skill only when a config is present, and formats an unconfigured repo only when explicitly asked, via `--force`. It counts as formatted only the files prettier actually rewrote — already-clean files are reported separately, and files `.prettierignore` excludes aren't counted at all.
 
 ## Dependencies & caveats
 
-- **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
+- **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`, needed for the `simplify-code` skill's agent. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
 - **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the **`code-review-graph` MCP server** (a public PyPI package). See [Setup → graph skills](#3-optional-graph-skills-code-review-graph) to install it; MCP servers can't be plugin dependencies, so this stays a documented prerequisite.
 
 ## Developing this plugin
@@ -134,7 +130,7 @@ Do all five, in order:
 4. **Re-verify.** The newest cache directory should now match `HEAD`, and every file you changed should be present under it — in particular new files in `agents/` and each `skills/*/workflow.js`, which the cache does not synthesize.
 5. **Read the `<usage>` block of the task notification, not just `<status>`.** `<status>completed</status>` coexists with total failure: it means the workflow script returned, not that the work succeeded, and `agent_count` counts spawn attempts rather than successes. A run is a real pass only when `agents_error` is `0`, `agents_done` equals `agent_count`, and `unverified` is empty. `agents_error == agent_count` with `tool_uses: 0` means the agent type did not resolve — go back to step 1.
 
-`npm test` covers the Stop hooks and the `format-prettier` skill script (zero dependencies, `node --test`). Both are subject to the same cache rule, so a passing suite is necessary but not sufficient — an edit to either still needs steps 2–4 before it runs live.
+`npm test` covers hook registration invariants and the `format-prettier` skill script (zero dependencies, `node --test`). Both are subject to the same cache rule, so a passing suite is necessary but not sufficient — an edit to either still needs steps 2–4 before it runs live.
 
 ## Recommended plugins
 
