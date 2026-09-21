@@ -274,9 +274,10 @@ and lead message.
   `SendMessage({ to: "lead", message: "STATUS POLL" })`.
 - **On a lead message:** append `MSG<TAB><epoch><TAB><first line>` to the state file. If it
   begins `IMPLEMENTATION COMPLETE`, `TaskStop` the heartbeat, record the files changed, and
-  go to Phase 6. Beginning `REPLAN NEEDED`: `TaskStop` the heartbeat and take the re-plan
+  go to **Phase 5b**. Beginning `REPLAN NEEDED`: `TaskStop` the heartbeat and take the re-plan
   branch below. Anything else is an interim `STATUS:` line — keep polling. The lead's
-  background task-completion notification is an equivalent "done" signal.
+  background task-completion notification is an equivalent "done" signal — treat it the same
+  as `IMPLEMENTATION COMPLETE` and go to **Phase 5b**.
 - **Stall guard:** escalate to the user only when the last three `TICK` rows show an
   unchanged `files` count AND no `MSG` row falls after the third-from-last `TICK` — never on
   lead silence alone.
@@ -290,6 +291,32 @@ full and gate it with `AskUserQuestion` (*Approve revised plan* / *Revise (type 
 plan mode. On approve, overwrite the plan file from 4d and re-spawn the lead with the same
 background-spawn and poll loop above. Allow at most **two** re-plan rounds, then stop and
 report where it stalled.
+
+## Phase 5b — Language quality checks + simplifier
+
+These are opt-in checks the harness no longer runs on its own, so this skill runs them
+explicitly, scoped to the language(s) the implementation actually touched:
+
+```bash
+git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
+git ls-files --others --exclude-standard
+```
+
+Dedupe into one changed-file list.
+
+1. If any file matches `*.ts` or `*.tsx` (excluding `*.d.ts`), run
+   `Skill({ skill: "claude-skills:ts-check", args: "<the matching files>" })`.
+2. If any file matches `*.go` (excluding `vendor/` and generated files), run
+   `Skill({ skill: "claude-skills:golang-check", args: "<the matching files>" })`.
+3. Skip whichever check has no matching files — do not run `ts-check` on a Go-only
+   change or `golang-check` on a TS-only one.
+4. After whichever of the two ran (zero, one, or both), run
+   `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
+   once. The simplifier is not language-gated, so run it even when neither check matched.
+
+Both checks report only — they do not edit by default. Carry any findings they surface
+into the final message the same way Phase 6's `dimensionsUnverified` is carried; nothing
+in this step auto-fixes them. Then continue to Phase 6.
 
 ## Phase 6 — Code review (nested `Workflow`, xhigh + opus)
 
@@ -458,6 +485,7 @@ URL. Then: both plan file paths, the files changed, the code-review findings and
 was resolved (or "clean"), the short SHA, and `PR_URL`.
 
 State plainly, without burying it: any `unverified` or `unchallenged` thread from Phase 2,
-any verdict still `needs-user-input` after Phase 2b, any `dimensionsUnverified` from Phase
-6, and any reply that could not be posted. If Phase 7's guard stopped the pipeline, say
-that instead of reporting a commit.
+any verdict still `needs-user-input` after Phase 2b, Phase 5b's `ts-check`/`golang-check`
+findings (or "clean"/"skipped, no matching files") and the simplifier's summary, any
+`dimensionsUnverified` from Phase 6, and any reply that could not be posted. If Phase 7's
+guard stopped the pipeline, say that instead of reporting a commit.

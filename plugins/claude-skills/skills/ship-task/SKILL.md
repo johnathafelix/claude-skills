@@ -145,11 +145,11 @@ heartbeat is harmless and ends with the session.
 
 3. **On any message from the lead:** append `MSG<TAB><epoch><TAB><first line>` to the state
    file, then: if it begins `IMPLEMENTATION COMPLETE`, the run is done — `TaskStop` the
-   heartbeat, record the files changed from that report, and go to Phase 2. If it begins
+   heartbeat, record the files changed from that report, and go to **1g**. If it begins
    `REPLAN NEEDED`, `TaskStop` the heartbeat and go to **1f**. Anything else is an interim
    `STATUS:` line — keep polling. The lead's background task-completion notification is an
-   equivalent "done" signal: if it arrives, `TaskStop` the heartbeat and use the final
-   report the lead sent to `main`.
+   equivalent "done" signal: if it arrives, `TaskStop` the heartbeat, use the final
+   report the lead sent to `main`, and go to **1g**.
 
 4. **Stall guard.** Read the state file. Escalate to the user **only** when the last **three
    `TICK` rows show an unchanged `files` count AND no `MSG` row falls after the third-from-
@@ -171,6 +171,31 @@ same reason this whole design exists. On approve, overwrite the plan file from 1
 re-spawn the lead with that path plus the lead's completed-work summary, using the same
 background-spawn and poll loop as 1e. On revise, hand the notes to `planner` and re-gate.
 Allow at most **two** re-plan rounds, then stop and report where it stalled.
+
+**1g — Language quality checks + simplifier.** These are opt-in checks the harness no
+longer runs on its own, so this skill runs them explicitly, scoped to the language(s) the
+implementation actually touched:
+
+```bash
+git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
+git ls-files --others --exclude-standard
+```
+
+Dedupe into one changed-file list.
+
+1. If any file matches `*.ts` or `*.tsx` (excluding `*.d.ts`), run
+   `Skill({ skill: "claude-skills:ts-check", args: "<the matching files>" })`.
+2. If any file matches `*.go` (excluding `vendor/` and generated files), run
+   `Skill({ skill: "claude-skills:golang-check", args: "<the matching files>" })`.
+3. Skip whichever check has no matching files — do not run `ts-check` on a Go-only
+   change or `golang-check` on a TS-only one.
+4. After whichever of the two ran (zero, one, or both), run
+   `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
+   once. The simplifier is not language-gated, so run it even when neither check matched.
+
+Both checks report only — they do not edit by default. Carry any findings they surface
+into the final message to the user the same way Phase 2's `dimensionsUnverified` is
+carried; nothing in this step auto-fixes them.
 
 ## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
 
@@ -310,7 +335,8 @@ first.
 
 ## Final message to the user
 
-Report: outcome, both plan file paths, files changed (implementation + fixes), the
-code-review findings and how each was resolved (or "clean" / list any
-`dimensionsUnverified`), the final check's per-item verdict, and the PR URL. If Phase 5's
-guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
+Report: outcome, both plan file paths, files changed (implementation + fixes), 1g's
+`ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files") and the
+simplifier's summary, the code-review findings and how each was resolved (or "clean" /
+list any `dimensionsUnverified`), the final check's per-item verdict, and the PR URL. If
+Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
