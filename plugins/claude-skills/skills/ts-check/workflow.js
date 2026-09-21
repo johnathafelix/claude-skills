@@ -25,9 +25,9 @@ export const meta = {
 // Empirically derived in golang-check (see golang-check/SKILL.md): fanning out
 // all guidelines at once produced malformed sub-agent responses, some
 // misreported as prompt injection. Capping at 4 concurrent fixed it. ts-check
-// has exactly 4 guidelines today, so this pool is a single wave and the cap is
-// future-proofing plus retry containment (a retry occupies a lane, so
-// in-flight agents never exceed the cap). If a 5th guideline is ever added and
+// has 5 guidelines now, so this pool runs in two waves and the cap is
+// retry containment as well as throttling (a retry occupies a lane, so
+// in-flight agents never exceed the cap). If a 6th guideline is ever added and
 // the same malformed-response symptom reappears, lower this — don't raise it
 // without equivalent evidence.
 const CONCURRENCY = 4
@@ -41,9 +41,9 @@ const RETRIES = 2
 // fix-conflict resolution and can apply a cosmetic inline over a conflicting
 // strong-types fix on the same line.
 //
-// Adding a 5th guideline touches this list AND ts-check/SKILL.md Step 2's drift
+// Adding a guideline touches this list AND ts-check/SKILL.md Step 2's drift
 // check. golang-check deliberately has no priority ranking.
-const PRIORITY = ['strong-types', 'no-magic-values', 'data-over-logic', 'redundant-variable-inline']
+const PRIORITY = ['strong-types', 'no-magic-values', 'data-over-logic', 'object-params', 'redundant-variable-inline']
 
 function priorityOf(stem) {
   const i = PRIORITY.indexOf(stem)
@@ -358,7 +358,7 @@ if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) 
 
 // An empty/missing guidelines or files list is never legitimate here —
 // SKILL.md Step 1 already stops on an empty scope, and the guideline list is a
-// fixed 4. Fail loud rather than silently checking nothing and letting the
+// fixed 5. Fail loud rather than silently checking nothing and letting the
 // caller report a false "clean" result.
 const guidelines = parsedArgs.guidelines
 if (!Array.isArray(guidelines) || guidelines.length === 0) {

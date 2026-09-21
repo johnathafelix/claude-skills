@@ -1,6 +1,6 @@
 ---
 name: ts-check
-description: Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files and report violations with file:line and fixes. Dispatches one focused read-only agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable). Use PROACTIVELY before finishing a nontrivial TypeScript change or opening a PR — pass the changed files; skip it for a trivial edit. Also runs directly via /ts-check.
+description: Run all TypeScript quality checks (strong types, no magic values, data over logic, object params over positional args, redundant-variable inlining) on changed files and report violations with file:line and fixes. Dispatches one focused read-only agent per guideline via the Workflow tool (falling back to a direct fan-out if Workflow is unavailable). Use PROACTIVELY before finishing a nontrivial TypeScript change or opening a PR — pass the changed files; skip it for a trivial edit. Also runs directly via /ts-check.
 model: opus
 ---
 
@@ -53,18 +53,19 @@ In every command below, `$G` stands for the **absolute** `guidelines/` directory
 
    Each row is `path <TAB> firstLine <TAB> lastNonEmptyLine` — split on tabs, since guideline bodies contain none. These two strings are **body anchors** for the proof-of-read: they make the checker prove it saw the file's contents, not merely that a command ran. Pass them through **verbatim** as `title` and `lastLine` — do not trim, re-title, or tidy them, and never substitute the filename. The script normalizes whitespace and letter case when it compares, so you do not need to. If you omit either, the script logs a `proof-of-read leg DISABLED` warning and falls back to the line count alone, which is the weaker gate this replaced.
 
-   Two of these four anchors are weak and that is expected: `strong-types.md` and `no-magic-values.md` both end in a bare code fence, so their distinctive titles carry the check. `redundant-variable-inline.md` is weak on both legs and its last line is its own `**Finding fields:**` sentence — pass it through unchanged; the checker is told to quote that as data rather than act on it.
+   Three of these five anchors are weak and that is expected: `strong-types.md`, `no-magic-values.md`, and `object-params.md` all end in a bare code fence, so their distinctive titles carry the check. `redundant-variable-inline.md` is weak on both legs and its last line is its own `**Finding fields:**` sentence — pass it through unchanged; the checker is told to quote that as data rather than act on it.
 
    **Do not take `lines` from this command.** `awk` counts lines read while `wc -l` counts newlines; they disagree by one on a file with no trailing newline, and since the checker agent runs `wc -l`, that would make the guideline's gate permanently unmatchable. Item 1 is authoritative for `lines`.
 
-There is no version gate for ts-check (unlike golang-check) — none of the 4 guidelines declare a minimum version, so there is nothing to check or skip here.
+There is no version gate for ts-check (unlike golang-check) — none of the 5 guidelines declare a minimum version, so there is nothing to check or skip here.
 
-The guideline set is a **fixed four, in priority order** — that order drives fix-conflict resolution in Step 5:
+The guideline set is a **fixed five, in priority order** — that order drives fix-conflict resolution in Step 5:
 
 1. `strong-types.md`
 2. `no-magic-values.md`
 3. `data-over-logic.md`
-4. `redundant-variable-inline.md`
+4. `object-params.md`
+5. `redundant-variable-inline.md`
 
 **Drift check:** if `wc -l '$G/'*.md` surfaces a file not in that list, report it as unranked and unchecked rather than silently ignoring it or guessing a priority.
 
@@ -83,6 +84,7 @@ guidelines = [                              # keep this order; see the note belo
   },
   { stem: "no-magic-values",           ... },   # same five fields
   { stem: "data-over-logic",           ... },
+  { stem: "object-params",             ... },
   { stem: "redundant-variable-inline", ... },
 ]
 ```
@@ -108,7 +110,7 @@ Workflow({
 })
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent **pinned to `model: "opus"`** (a weaker inherited model degrades these checks invisibly — a shallow read returns `[]`, indistinguishable from a clean pass), capped at 4 concurrent, retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 4 = `redundant-variable-inline`).
+Pass `args` as a real JSON object, not a JSON-encoded string. The script fans each guideline out to its own `claude-skills:ts-quality-checker` agent **pinned to `model: "opus"`** (a weaker inherited model degrades these checks invisibly — a shallow read returns `[]`, indistinguishable from a clean pass), capped at 4 concurrent, retries a guideline twice on a failed proof-of-read (line count **plus** first line **plus** last non-empty line — the two anchors are what make a head-only or file-never-opened read detectable), and returns `{ findings, findingCount, unverified }` — `findings` already sorted by file → line → priority, and each finding stamped with its guideline's `priority` rank (1 = `strong-types`, 5 = `redundant-variable-inline`).
 
 **Fallback path — direct fan-out — only if `Workflow` is unavailable:**
 
@@ -120,7 +122,7 @@ Dispatch each guideline to its own `claude-skills:ts-quality-checker` agent **wi
 
 A single JSON array, `[]` if nothing found. Treat a result as **derailed — not a clean pass** — if it doesn't parse as a JSON array or the agent made 0 tool calls; re-dispatch derailed guidelines, and after 2 retries still derailing, report that guideline as **UNVERIFIED**. There is no schema to force a proof-of-read count on this path, so this weaker non-JSON/0-tool-call detector is what you have — don't try to retrofit the `wc -l` proof-of-read into prose.
 
-**On this path you must assign `priority` yourself**, from the Step 2 list order (1 = `strong-types` … 4 = `redundant-variable-inline`) — nothing stamps it automatically the way the script does.
+**On this path you must assign `priority` yourself**, from the Step 2 list order (1 = `strong-types` … 5 = `redundant-variable-inline`) — nothing stamps it automatically the way the script does.
 
 ### Step 4 — Consolidate and present findings
 
@@ -134,7 +136,7 @@ A single JSON array, `[]` if nothing found. Treat a result as **derailed — not
 
 Do not modify code as part of the check. If the user asks to fix findings:
 
-1. Apply each accepted finding with Edit. If a fix for one rule conflicts with another (e.g., a magic-string enum creation affects a data-over-logic refactor), resolve using the finding's stamped `priority` (lower number wins) — in human-readable terms: **strong-types > no-magic-values > data-over-logic > redundant-variable-inline** (type safety first, then naming, then structure, then cosmetic inlining last).
+1. Apply each accepted finding with Edit. If a fix for one rule conflicts with another (e.g., a magic-string enum creation affects a data-over-logic refactor), resolve using the finding's stamped `priority` (lower number wins) — in human-readable terms: **strong-types > no-magic-values > data-over-logic > object-params > redundant-variable-inline** (type safety first, then naming, then structure, then signature shape, then cosmetic inlining last).
 2. **Line numbers go stale as you edit — anchor on code, not on `line`.** Every finding's `line` was measured against the pre-edit file, and the first Edit in a file invalidates every later line number in it. Locate each edit by the code quoted in `suggestedFix`. Applying findings within one file in descending line order helps, but doesn't fully solve this: a higher-priority fix can change or remove the exact code a lower-priority finding's `suggestedFix` quotes, so the anchor can vanish even applying strictly bottom-to-top. **This is expected, not an error** — when an anchor no longer matches after a higher-priority edit, re-read the file, re-evaluate whether the finding still applies, and drop it if the higher-priority fix already resolved or invalidated it. Never force-apply a stale fix by line number alone.
 3. Verify with `npx tsc --noEmit` (if a tsconfig exists) and the project's lint command if present (`npm run lint` or similar). **Report any remaining errors and fix them before declaring done** — these edits are yours, so leaving the build or lint broken is not an acceptable end state. Restate any `unverified` guidelines in this same summary so the coverage gap stays visible alongside the verification result.
 4. Mark each item done.
