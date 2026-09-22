@@ -30,6 +30,21 @@ proceed without one.
 
 ## Flow
 
+0. **Branch.** `git branch --show-current`. If `main` or `master`, create a feature branch
+   before anything else. Pick the name:
+   - **Linear ticket in the request** (an issue ID like `ENG-123` or a `linear.app/.../issue/...`
+     URL): load `mcp__claude_ai_Linear__get_issue` via `ToolSearch`, fetch the issue, and
+     use its `gitBranchName` verbatim.
+   - **Otherwise**, or if the Linear lookup fails or returns no `gitBranchName`: derive
+     `<type>/<slug>` from the request — `<type>` is the conventional-commit type that
+     fits (`feat`, `fix`, `refactor`, `chore`, `docs`, …), `<slug>` is 3–6 lowercase
+     kebab-case words capturing the task (e.g. `feat/add-csv-export-to-reports`).
+
+   Run `git switch -c <name>` (uncommitted changes carry over). If the branch already
+   exists: for a Linear name, `git switch <name>` — it is the same ticket's branch; for a
+   derived name, append `-2`, `-3`, … until it is free. Tell the user the branch name in
+   one line. Creating the branch is allowed in plan mode — it changes no file contents.
+
 1. **Check the permission mode.** Step 3's gate is `ExitPlanMode`, which the harness
    rejects unless the session is in plan mode — so this skill is meant to be invoked
    **from plan mode**. If it is not, call `EnterPlanMode` (main-thread only; it throws in

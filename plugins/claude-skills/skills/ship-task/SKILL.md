@@ -35,13 +35,26 @@ If the request above is empty, ask the user what they want shipped and STOP.
 
 ## Phase 0 — Preflight
 
-1. `git branch --show-current`. If `main` or `master`, STOP and tell the user to create
-   a feature branch first — `/draft-pr` in Phase 6 refuses to run from either, and
-   finding that out after the whole pipeline runs would waste it.
+1. `git branch --show-current`. If `main` or `master`, create a feature branch before
+   anything else — `/draft-pr` in Phase 6 refuses to run from either, and finding that
+   out after the whole pipeline runs would waste it. Pick the name:
+   - **Linear ticket in the request** (an issue ID like `ENG-123` or a `linear.app/.../issue/...`
+     URL): load `mcp__claude_ai_Linear__get_issue` via `ToolSearch`, fetch the issue, and
+     use its `gitBranchName` verbatim.
+   - **Otherwise**, or if the Linear lookup fails or returns no `gitBranchName`: derive
+     `<type>/<slug>` from the request — `<type>` is the conventional-commit type that
+     fits (`feat`, `fix`, `refactor`, `chore`, `docs`, …), `<slug>` is 3–6 lowercase
+     kebab-case words capturing the task (e.g. `feat/add-csv-export-to-reports`).
+
+   Run `git switch -c <name>` (uncommitted changes carry over). If the branch already
+   exists: for a Linear name, `git switch <name>` — it is the same ticket's branch; for a
+   derived name, append `-2`, `-3`, … until it is free. Tell the user the branch name in
+   one line. Creating the branch is allowed in plan mode — it changes no file contents.
+   Remember the branch you started on (`main` or `master`) as `ORIGIN_BRANCH`.
 2. `git status --porcelain` to snapshot pre-existing dirty files, for context if later
    diffs need to be attributed.
 3. Determine `BASE_BRANCH`: `gh pr view --json baseRefName --jq '.baseRefName'`; if that
-   fails (no PR yet), use `main`.
+   fails (no PR yet), use `ORIGIN_BRANCH` when step 1 created the branch, else `main`.
 4. Check the permission mode. Phase 1's gate is `ExitPlanMode`, which the harness rejects
    unless the session is in plan mode — so this skill is meant to be invoked **from plan
    mode**. If it is not, call `EnterPlanMode` (main-thread only; it throws in agent
