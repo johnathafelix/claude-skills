@@ -185,9 +185,9 @@ re-spawn the lead with that path plus the lead's completed-work summary, using t
 background-spawn and poll loop as 1e. On revise, hand the notes to `planner` and re-gate.
 Allow at most **two** re-plan rounds, then stop and report where it stalled.
 
-**1g — Language quality checks + simplifier.** These are opt-in checks the harness no
-longer runs on its own, so this skill runs them explicitly, scoped to the language(s) the
-implementation actually touched:
+**1g — Quality checks + simplifier.** These are opt-in checks the harness no longer
+runs on its own, so this skill runs them explicitly — the language checks scoped to the
+language(s) the implementation actually touched, the test check over the whole change:
 
 ```bash
 git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
@@ -202,13 +202,22 @@ Dedupe into one changed-file list.
    `Skill({ skill: "claude-skills:golang-check", args: "<the matching files>" })`.
 3. Skip whichever check has no matching files — do not run `ts-check` on a Go-only
    change or `golang-check` on a TS-only one.
-4. After whichever of the two ran (zero, one, or both), run
+4. Run `Skill({ skill: "claude-skills:test-check", args: "<the full changed-file list>" })`
+   once. It is not language-gated: it splits the given files into source and test files
+   and judges the tests behind the change (coverage of new lines, assertion fidelity and
+   strictness, DB integration, mock expectations). Pass the deduped list explicitly — its
+   own `git diff` scope would miss the untracked files the workers created, the same trap
+   Phase 2 guards against. Skip it only when the changed-file list contains no code at all
+   (docs/config-only change).
+5. After whichever of the three ran, run
    `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
-   once. The simplifier is not language-gated, so run it even when neither check matched.
+   once. The simplifier is not language-gated, so run it even when no check matched.
 
-Both checks report only — they do not edit by default. Carry any findings they surface
-into the final message to the user the same way Phase 2's `dimensionsUnverified` is
-carried; nothing in this step auto-fixes them.
+All three checks report only — they do not edit by default. Carry any findings they
+surface into the final message to the user the same way Phase 2's `dimensionsUnverified`
+is carried; nothing in this step auto-fixes them. For `test-check`, carry its `refuted`,
+`unchallenged`, and UNVERIFIED lists too — a finding it dropped or could not verify is
+part of the report, not noise.
 
 ## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
 
@@ -349,7 +358,8 @@ first.
 ## Final message to the user
 
 Report: outcome, both plan file paths, files changed (implementation + fixes), 1g's
-`ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files") and the
+`ts-check`/`golang-check`/`test-check` findings (or "clean"/"skipped, no matching
+files"; for `test-check` also its refuted/unchallenged/UNVERIFIED lists) and the
 simplifier's summary, the code-review findings and how each was resolved (or "clean" /
 list any `dimensionsUnverified`), the final check's per-item verdict, and the PR URL. If
 Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
