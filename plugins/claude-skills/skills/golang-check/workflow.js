@@ -5,7 +5,8 @@ export const meta = {
 }
 
 // ── MIRROR NOTICE ────────────────────────────────────────────────────────────
-// Sibling: ../ts-check/workflow.js. These are deliberate near-duplicates, NOT
+// Siblings: ../ts-check/workflow.js and ../test-check/workflow.js (the latter
+// shares only the [SHARED-CORE] blocks). These are deliberate near-duplicates, NOT
 // extracted into a shared module: the Workflow runtime's support for relative
 // `import` from scriptPath is UNVERIFIED, and a failed import is a runtime throw
 // inside a background task — it would take out the primary path of both skills
