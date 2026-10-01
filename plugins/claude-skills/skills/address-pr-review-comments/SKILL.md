@@ -59,7 +59,7 @@ If it is empty, fetch every unresolved review thread from the PR. That is the no
 4. Staleness check, **read-only**: compare local `HEAD` against
    `git ls-remote origin <current branch>`. Use `ls-remote`, not a fetch — the session is
    in plan mode here and fetching writes to `.git`. If the remote is ahead, STOP and point
-   the user at `/merge`. Finding this out after the whole pipeline runs would waste it.
+   the user at `/rebase-or-merge`. Finding this out after the whole pipeline runs would waste it.
 5. `git status --porcelain` to snapshot pre-existing dirty files, for attributing later
    diffs.
 6. Resolve the sibling-repo search root:
