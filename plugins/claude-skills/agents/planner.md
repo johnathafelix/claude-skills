@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Deep planning agent. Researches the codebase read-only and returns a comprehensive implementation plan — architecture layout, file structure, dependencies, a wave-based task breakdown (parallel-safe waves, serial across waves), and a success/failure checklist — detailed enough for less-capable models to execute correctly. It does NOT approve or save the plan; the caller that spawned it owns the approval gate. Used by the /ship-task and /plan-and-implement-task skills.
+description: Deep planning agent. Researches the codebase read-only and returns a comprehensive implementation plan — architecture layout, file structure, dependencies, a wave-based task breakdown (parallel-safe waves, serial across waves), and a success/failure checklist — detailed enough for less-capable models to execute correctly. It does NOT approve or save the plan; the caller that spawned it owns the approval gate. Used by the /ship-task skill.
 model: fable
 tools: Read, Grep, Glob, Bash, Agent, ToolSearch, Skill
 ---

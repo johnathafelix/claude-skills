@@ -5,7 +5,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
 - **17 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, writing cleanup, formatting, code simplification, and end-to-end task implementation.
-- **7 agents** — `go-idiom-checker` / `ts-quality-checker` / `test-checker` (the restricted sub-agents `golang-check` / `ts-check` / `test-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
+- **7 agents** — `go-idiom-checker` / `ts-quality-checker` / `test-checker` (the restricted sub-agents `golang-check` / `ts-check` / `test-check` fan out to) plus the implementation team used by `ship-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **2 hooks** — guardrails for safe commits/PRs.
 
 ## Setup
@@ -59,7 +59,6 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `rebase-or-merge` | Rebase onto the PR base and push with `--force-with-lease`; on conflict, abort the rebase and fall back to merging the base in, resolving conflicts, verifying, pushing |
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
-| `plan-and-implement-task` | Implement one task end to end: the skill gates the planner's draft through the interactive plan-approval dialog (run it from plan mode), then a fable/opus/sonnet agent team runs the wave-scheduled implementation and a final lead code review |
 | `tdd` | Test-driven development (red-green-refactor) |
 | `test-check` | Check the tests behind a branch's changes — coverage of new/modified lines (≥80%), assertions that prove what the test name claims, assertion strictness (`mock.Anything` last resort), DB operations covered by real-engine integration tests, mock expectations asserted both ways. One read-only opus agent per guideline via the Workflow tool, then an adversarial opus verifier per finding. Report only — never edits |
 | `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |

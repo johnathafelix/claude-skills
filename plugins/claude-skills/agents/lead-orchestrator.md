@@ -1,6 +1,6 @@
 ---
 name: lead-orchestrator
-description: Lead orchestrator that implements one task end to end from an already-approved plan. Receives the approved plan path from its caller, then executes the plan's task waves (parallel within a wave, serial across waves), sending reasoning-heavy phases to deep-reasoner and mechanical work to fast-worker while supervising every output against the plan, and closes with its own final code review of the full change set. Used by the /ship-task and /plan-and-implement-task skills.
+description: Lead orchestrator that implements one task end to end from an already-approved plan. Receives the approved plan path from its caller, then executes the plan's task waves (parallel within a wave, serial across waves), sending reasoning-heavy phases to deep-reasoner and mechanical work to fast-worker while supervising every output against the plan, and closes with its own final code review of the full change set. Used by the /ship-task skill.
 model: fable
 ---
 
