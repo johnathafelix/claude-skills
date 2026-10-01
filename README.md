@@ -4,7 +4,7 @@ My personal [Claude Code](https://claude.com/claude-code) skills and hooks, pack
 
 This repo is a **plugin marketplace** containing a single plugin, `claude-skills`, that bundles:
 
-- **20 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, code-graph navigation, writing cleanup, formatting, code simplification, and end-to-end task implementation.
+- **17 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, REST API review, writing cleanup, formatting, code simplification, and end-to-end task implementation.
 - **7 agents** — `go-idiom-checker` / `ts-quality-checker` / `test-checker` (the restricted sub-agents `golang-check` / `ts-check` / `test-check` fan out to) plus the implementation team shared by `ship-task` and `plan-and-implement-task`: `lead-orchestrator`, `planner`, `deep-reasoner`, `fast-worker`.
 - **2 hooks** — guardrails for safe commits/PRs.
 
@@ -44,29 +44,7 @@ claude plugin marketplace add anthropics/claude-plugins-official
 /plugin install claude-skills@claude-skills
 ```
 
-### 3. Optional: graph skills (`code-review-graph`)
-
-The four graph skills — `debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes` — call the `code-review-graph` MCP tools, so they need its server. It's a public Python package. Set it up once:
-
-1. Install the CLI (needs Python ≥ 3.10 and [pipx](https://pipx.pypa.io)):
-   ```bash
-   pipx install code-review-graph
-   ```
-2. Register its MCP server with Claude Code — this plugin already ships the graph skills, so skip its own copies:
-   ```bash
-   code-review-graph install --platform claude-code --no-skills
-   ```
-   It can also add auto-update hooks and inject graph instructions into `CLAUDE.md`; see `code-review-graph install --help`.
-3. Build the graph in each repo you want to use it in:
-   ```bash
-   cd /path/to/repo
-   code-review-graph build
-   ```
-   After that it updates incrementally (via the hooks step 2 installs, or `code-review-graph watch`).
-
-Without this, only the four graph skills are inert — the rest of the plugin works fine.
-
-### 4. Optional: status line
+### 3. Optional: status line
 
 Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (see [Status line](#status-line-optional-manual-setup)).
 
@@ -87,10 +65,6 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
 | `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
 | `check-rest-api-design` | Review a REST/HTTP API against design best practices |
-| `debug-issue` | Systematically debug using graph-powered navigation † |
-| `explore-codebase` | Navigate codebase structure via the knowledge graph † |
-| `refactor-safely` | Plan/execute refactors using dependency analysis † |
-| `review-changes` | Risk-aware code review via change detection + impact † |
 | `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
@@ -112,7 +86,6 @@ The `format-prettier` skill (see Skills, above) runs `prettier --write` on given
 ## Dependencies & caveats
 
 - **Required plugin dependency: `code-simplifier`** — a hard dependency, auto-installed with `claude-skills`, needed for the `simplify-code` skill's agent. See [Setup → Required dependency](#2-required-dependency--code-simplifier) for the details and the bare-machine fix.
-- **† Graph skills** (`debug-issue`, `explore-codebase`, `refactor-safely`, `review-changes`) require the **`code-review-graph` MCP server** (a public PyPI package). See [Setup → graph skills](#3-optional-graph-skills-code-review-graph) to install it; MCP servers can't be plugin dependencies, so this stays a documented prerequisite.
 
 ## Developing this plugin
 
