@@ -107,7 +107,6 @@ function main() {
     const abs = path.resolve(fp);
 
     if (!PRETTIER_EXT.has(ext(abs))) continue;
-    if (abs.includes('/.claude/')) continue;  // claude infra/plans/hooks
     if (isTemp(abs)) continue;                // scratchpad/temp files
     if (!fs.existsSync(abs)) continue;        // passed then deleted/moved
     changed.add(abs);

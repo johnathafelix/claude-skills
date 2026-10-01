@@ -116,22 +116,21 @@ test("formats a configured project, honoring its config", (t) => {
 });
 
 // SKILL.md's own scope step lists `git diff --name-only` output, which is
-// repo-relative — the .claude/ exclusion has to work on that, not just on the
+// repo-relative — the script has to resolve that against cwd, not just accept the
 // absolute paths a transcript-driven hook always got.
-test("filters a repo-relative .claude/ path the same as an absolute one", (t) => {
+test("formats a repo-relative path the same as an absolute one", (t) => {
   const { dir } = sandbox(t, {
     ".prettierrc": "{}\n",
-    ".claude/hooks/local.js": "const c =3\n",
+    "src/a.js": "const a =1\n",
   });
 
-  const r = run([".claude/hooks/local.js"], { cwd: dir });
+  const r = run(["src/a.js"], { cwd: dir });
 
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(
-    fs.readFileSync(path.join(dir, ".claude/hooks/local.js"), "utf8"),
-    "const c =3\n",
+    fs.readFileSync(path.join(dir, "src/a.js"), "utf8"),
+    "const a = 1;\n",
   );
-  assert.strictEqual(r.stdout, "nothing to format");
 });
 
 // A bare .prettierignore (no .prettierrc, no package.json) is enough to count as
@@ -171,25 +170,16 @@ test("a file excluded by .prettierignore is not counted as already formatted", (
   );
 });
 
-test("filters .claude/, unsupported extensions, and missing files", (t) => {
+test("filters unsupported extensions and missing files", (t) => {
   const { dir, paths } = sandbox(t, {
     ".prettierrc": "{}\n",
-    ".claude/hooks/local.js": "const c =3\n",
     "src/main.go": "package  main\n",
   });
 
   const missing = path.join(dir, "src", "gone.js");
-  const r = run([
-    paths[".claude/hooks/local.js"],
-    paths["src/main.go"],
-    missing,
-  ]);
+  const r = run([paths["src/main.go"], missing]);
 
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(
-    fs.readFileSync(paths[".claude/hooks/local.js"], "utf8"),
-    "const c =3\n",
-  );
   assert.strictEqual(
     fs.readFileSync(paths["src/main.go"], "utf8"),
     "package  main\n",

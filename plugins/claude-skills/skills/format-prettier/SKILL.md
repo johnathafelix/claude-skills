@@ -19,7 +19,7 @@ Format files with `prettier --write`, scoped to one project at a time.
    - Else if you were invoked right after editing files this turn, use those files.
    - Else fall back to `git diff --name-only HEAD` plus `git ls-files --others --exclude-standard` for uncommitted changed files.
 
-   `git diff --name-only` returns paths relative to the repo root — resolve every candidate to an absolute path before passing it (e.g. join with the repo root from `git rev-parse --show-toplevel`, or run the script with `cwd` set to the repo root). The script filters by extension, skips `.claude/` and temp paths, and skips missing files on its own, but it needs absolute paths to do that correctly.
+   `git diff --name-only` returns paths relative to the repo root — resolve every candidate to an absolute path before passing it (e.g. join with the repo root from `git rev-parse --show-toplevel`, or run the script with `cwd` set to the repo root). The script filters by extension, skips temp paths, and skips missing files on its own, but it needs absolute paths to do that correctly.
 
 3. **Run**: `node <abs>/format-prettier.cjs [--force] <paths...>`
 
