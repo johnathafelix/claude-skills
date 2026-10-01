@@ -292,10 +292,11 @@ plan mode. On approve, overwrite the plan file from 4d and re-spawn the lead wit
 background-spawn and poll loop above. Allow at most **two** re-plan rounds, then stop and
 report where it stalled.
 
-## Phase 5b — Language quality checks + simplifier
+## Phase 5b — Quality checks + simplifier
 
 These are opt-in checks the harness no longer runs on its own, so this skill runs them
-explicitly, scoped to the language(s) the implementation actually touched:
+explicitly — the language checks scoped to the language(s) the implementation actually
+touched, the test check over the whole change:
 
 ```bash
 git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
@@ -310,13 +311,26 @@ Dedupe into one changed-file list.
    `Skill({ skill: "claude-skills:golang-check", args: "<the matching files>" })`.
 3. Skip whichever check has no matching files — do not run `ts-check` on a Go-only
    change or `golang-check` on a TS-only one.
-4. After whichever of the two ran (zero, one, or both), run
+4. Run `Skill({ skill: "claude-skills:test-check", args: "<the full changed-file list>" })`
+   once. It is not language-gated: it splits the given files into source and test files
+   and judges the tests behind the change (coverage of new lines, assertion fidelity and
+   strictness, DB integration, mock expectations). Pass the deduped list explicitly — its
+   own `git diff` scope would miss the untracked files the workers created, the same trap
+   Phase 6 guards against. Skip it only when the changed-file list contains no code at all.
+   When its notification arrives, keep its confirmed `findings` as `TEST_FINDINGS` — Phase 7
+   plans fixes for them alongside the code-review findings.
+5. After whichever of the three ran, run
    `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
-   once. The simplifier is not language-gated, so run it even when neither check matched.
+   once. The simplifier is not language-gated, so run it even when no check matched.
 
-Both checks report only — they do not edit by default. Carry any findings they surface
-into the final message the same way Phase 6's `dimensionsUnverified` is carried; nothing
-in this step auto-fixes them. Then continue to Phase 6.
+All three checks report only — they do not edit. `ts-check`/`golang-check` findings are
+carried into the final message the same way Phase 6's `dimensionsUnverified` is carried;
+nothing in this step auto-fixes them. `test-check` findings are different: they are already
+independently verified, and each carries an `action`, so they are **acted on** —
+`TEST_FINDINGS` feeds Phase 7a's fix plan and 7c checks each one as fixed / not fixed.
+Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final message — a
+finding it dropped or could not verify is part of the report, not noise. Then continue to
+Phase 6.
 
 ## Phase 6 — Code review (nested `Workflow`, xhigh + opus)
 
@@ -355,15 +369,19 @@ Workflow({
 Normalize the source path to an absolute one before the `cp` rather than leaving `..` for
 the runtime to resolve. Wait for the completion notification, then read
 `{ findings, findingCount, dimensionsUnverified }`. Report any `dimensionsUnverified`
-plainly later — an unverified dimension is not a clean pass on it. If `findingCount` is 0,
-log a clean review and skip to Phase 8.
+plainly later — an unverified dimension is not a clean pass on it. If `findingCount` is 0
+**and** `TEST_FINDINGS` from 5b is empty, log a clean review and skip to Phase 8. If either
+list is non-empty, continue to Phase 7 with whichever lists have entries — a clean code
+review does not skip the test fixes, and vice versa.
 
 ## Phase 7 — Fix the review findings
 
 **7a — Fix plan (`deep-reasoner`, opus, auto-approved).** Spawn
 `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`. Give it
-the confirmed findings (file, line, description, suggestedFix, dimension) and the Phase 4d
-plan path, and require wave-structured output:
+the confirmed findings (file, line, description, suggestedFix, dimension), `TEST_FINDINGS`
+from 5b (file, line–endLine, rule, description, rationale, action — the `action` is the fix
+to plan; for `coverage` findings it names the uncovered ranges to write tests for), and the
+Phase 4d plan path, and require wave-structured output:
 
 ```
 ### Wave N
@@ -374,7 +392,12 @@ plan path, and require wave-structured output:
 ```
 
 Group independent fixes (disjoint files) into one wave; serialize fixes touching the same
-file. `deep-reasoner` is analysis-only, so write its returned text to
+file. Test fixes must satisfy the guideline that raised them, not just silence it: a
+`db-integration` finding is fixed by a test against a real engine (reuse the repo's
+existing harness if the finding names one), an `assertion-strictness` finding by the actual
+value or a typed matcher, a `mock-expectations` finding by asserting both halves, a
+`coverage` finding by tests that exercise the named ranges with real assertions.
+`deep-reasoner` is analysis-only, so write its returned text to
 `.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes-followup.md` yourself. There is no
 approval gate here by design.
 
@@ -399,11 +422,13 @@ Supervise each result against the plan — right files, verify command actually 
 contradiction, stop the wave and report rather than improvising a work-around.
 
 **7c — Final check (`deep-reasoner`, opus).** Analysis only. Give it both plan paths, the
-confirmed findings, the `valid` verdicts from Phase 2, and `git diff origin/$BASE_BRANCH`.
-Ask for a per-item verdict, not a summary:
+confirmed findings, `TEST_FINDINGS`, the `valid` verdicts from Phase 2, and
+`git diff origin/$BASE_BRANCH`. Ask for a per-item verdict, not a summary:
 
 - every `valid` review comment: addressed / partially addressed / not addressed
 - every code-review finding: fixed / not fixed
+- every `test-check` finding: fixed / not fixed — "fixed" means the test now asserts or
+  covers what the finding's `action` asked for, not merely that a test was touched
 - every success-checklist item from Phase 4: pass / fail, with evidence
 
 On any gap, run exactly **one** remediation pass (`claude-skills:fast-worker`,
@@ -486,6 +511,7 @@ was resolved (or "clean"), the short SHA, and `PR_URL`.
 
 State plainly, without burying it: any `unverified` or `unchallenged` thread from Phase 2,
 any verdict still `needs-user-input` after Phase 2b, Phase 5b's `ts-check`/`golang-check`
-findings (or "clean"/"skipped, no matching files") and the simplifier's summary, any
-`dimensionsUnverified` from Phase 6, and any reply that could not be posted. If Phase 7's
+findings (or "clean"/"skipped, no matching files"), Phase 5b's `test-check` findings and
+how each was resolved (plus its refuted/unchallenged/UNVERIFIED lists), the simplifier's
+summary, any `dimensionsUnverified` from Phase 6, and any reply that could not be posted. If Phase 7's
 guard stopped the pipeline, say that instead of reporting a commit.

@@ -208,16 +208,19 @@ Dedupe into one changed-file list.
    strictness, DB integration, mock expectations). Pass the deduped list explicitly — its
    own `git diff` scope would miss the untracked files the workers created, the same trap
    Phase 2 guards against. Skip it only when the changed-file list contains no code at all
-   (docs/config-only change).
+   (docs/config-only change). When its notification arrives, keep its confirmed `findings`
+   as `TEST_FINDINGS` — Phase 3 plans fixes for them alongside the code-review findings.
 5. After whichever of the three ran, run
    `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
    once. The simplifier is not language-gated, so run it even when no check matched.
 
-All three checks report only — they do not edit by default. Carry any findings they
-surface into the final message to the user the same way Phase 2's `dimensionsUnverified`
-is carried; nothing in this step auto-fixes them. For `test-check`, carry its `refuted`,
-`unchallenged`, and UNVERIFIED lists too — a finding it dropped or could not verify is
-part of the report, not noise.
+All three checks report only — they do not edit. `ts-check`/`golang-check` findings are
+carried into the final message the same way Phase 2's `dimensionsUnverified` is carried;
+nothing in this step auto-fixes them. `test-check` findings are different: they are
+already independently verified, and each carries an `action`, so they are **acted on** —
+`TEST_FINDINGS` feeds Phase 3's fix plan and Phase 5 checks each one as fixed / not fixed.
+Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final message —
+a finding it dropped or could not verify is part of the report, not noise.
 
 ## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
 
@@ -273,14 +276,18 @@ notification, then read its `{ findings, findingCount, dimensionsUnverified }`. 
 `dimensionsUnverified` is non-empty, say so plainly when you eventually report to the
 user — an unverified dimension is not the same as a clean pass on it.
 
-If `findingCount` is 0, log that the review was clean and skip to Phase 5.
+If `findingCount` is 0 **and** `TEST_FINDINGS` from 1g is empty, log that the review was
+clean and skip to Phase 5. If either list is non-empty, continue to Phase 3 with whichever
+lists have entries — a clean code review does not skip the test fixes, and vice versa.
 
 ## Phase 3 — Fix plan (`deep-reasoner`, opus, auto-approved)
 
 Spawn `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`.
 Give it: the confirmed findings from Phase 2 (file, line, description, suggestedFix,
-dimension), the Phase 1 plan path for context on intended behavior, and an explicit
-instruction to structure its output as **waves**, matching `lead-orchestrator`'s own
+dimension), `TEST_FINDINGS` from 1g (file, line–endLine, rule, description, rationale,
+action — the `action` is the fix to plan; for `coverage` findings it names the uncovered
+ranges to write tests for), the Phase 1 plan path for context on intended behavior, and an
+explicit instruction to structure its output as **waves**, matching `lead-orchestrator`'s own
 task-breakdown format so Phase 4 can execute it the same way:
 
 ```
@@ -292,7 +299,11 @@ task-breakdown format so Phase 4 can execute it the same way:
 ```
 
 Group independent fixes (disjoint files) into the same wave; serialize fixes that touch
-the same file.
+the same file. Test fixes must satisfy the guideline that raised them, not just silence
+it: a `db-integration` finding is fixed by a test against a real engine (reuse the repo's
+existing harness if the finding names one), an `assertion-strictness` finding by the
+actual value or a typed matcher, a `mock-expectations` finding by asserting both halves,
+a `coverage` finding by tests that exercise the named ranges with real assertions.
 
 `deep-reasoner` is analysis-only and will not write files itself — write its returned
 text to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself. There is no approval gate
@@ -328,11 +339,13 @@ work-around.
 
 Spawn `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`,
 analysis only. Give it: both plan file paths (Phase 1's implementation plan and Phase
-3's fixes plan, if it exists), the confirmed findings list, and
+3's fixes plan, if it exists), the confirmed findings list, `TEST_FINDINGS`, and
 `git diff origin/$BASE_BRANCH`. Ask for a per-item verdict, not a summary:
 
 - every implementation-plan task: done / partial / missing
 - every code-review finding: fixed / not fixed
+- every `test-check` finding: fixed / not fixed — "fixed" means the test now asserts or
+  covers what the finding's `action` asked for, not merely that a test was touched
 - every success-checklist item from Phase 1: pass / fail, with evidence
 
 If it reports any gap, run exactly **one** remediation pass
@@ -358,8 +371,9 @@ first.
 ## Final message to the user
 
 Report: outcome, both plan file paths, files changed (implementation + fixes), 1g's
-`ts-check`/`golang-check`/`test-check` findings (or "clean"/"skipped, no matching
-files"; for `test-check` also its refuted/unchallenged/UNVERIFIED lists) and the
-simplifier's summary, the code-review findings and how each was resolved (or "clean" /
-list any `dimensionsUnverified`), the final check's per-item verdict, and the PR URL. If
+`ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files"), 1g's
+`test-check` findings and how each was resolved (plus its refuted/unchallenged/UNVERIFIED
+lists), the simplifier's summary, the code-review findings and how each was resolved (or
+"clean" / list any `dimensionsUnverified`), the final check's per-item verdict, and the
+PR URL. If
 Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
