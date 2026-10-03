@@ -11,7 +11,7 @@ Take a task from description to an open, described PR through the existing agent
 (opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
 code review runs at xhigh effort on opus; `deep-reasoner` designs an auto-approved fix
 plan; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
-`/draft-pr` → `/update-pr-description` ship it.
+`/draft-pr` → `/update-pr-description` ship it; `/compact-comments` runs last.
 
 **This skill spans many turns** — your own plan-approval dialog in Phase 1, and a
 backgrounded `Workflow` review in Phase 2. On any resume, re-read the plan files under
@@ -368,12 +368,22 @@ Strictly serial — each step depends on the previous one:
 `draft-pr` needs the commit pushed first; `update-pr-description` needs the PR to exist
 first.
 
+## Phase 7 — Compact comments
+
+Runs last, after the PR exists, so no later phase can re-inflate what it trims. Skip it
+if Phase 5's guard stopped the pipeline.
+
+1. `Skill({ skill: "claude-skills:compact-comments" })` — no args: it diffs against the
+   PR base itself, so its scope is every comment added in this PR.
+2. If `git status --porcelain` shows changes, `Skill({ skill: "claude-skills:git-commit",
+   args: "compact PR comments" })` then `git push`. If clean, there is nothing to ship.
+
 ## Final message to the user
 
 Report: outcome, both plan file paths, files changed (implementation + fixes), 1g's
 `ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files"), 1g's
 `test-check` findings and how each was resolved (plus its refuted/unchallenged/UNVERIFIED
 lists), the simplifier's summary, the code-review findings and how each was resolved (or
-"clean" / list any `dimensionsUnverified`), the final check's per-item verdict, and the
-PR URL. If
+"clean" / list any `dimensionsUnverified`), the final check's per-item verdict, Phase 7's
+compact-comments report (with its follow-up commit SHA, if any), and the PR URL. If
 Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
