@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
+description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated high/opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -14,7 +14,7 @@ mistake into the codebase, so nothing gets planned until it survives verificatio
 The pipeline: fetch the unresolved threads → a fable verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
-(opus) implements → xhigh/opus code review on the new code → `planner` fix plan and
+(opus) implements → high/opus code review on the new code → `planner` fix plan and
 YOU gate it → `fast-worker` applies → `/compact-comments` → `/git-commit` → push →
 `/update-pr-description` → one short reply per thread.
 
@@ -332,7 +332,7 @@ Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final m
 finding it dropped or could not verify is part of the report, not noise. Then continue to
 Phase 6.
 
-## Phase 6 — Code review (nested `Workflow`, xhigh + opus)
+## Phase 6 — Code review (nested `Workflow`, high + opus)
 
 This reviews the code the pipeline just wrote, not the reviewer's comments.
 
@@ -349,20 +349,19 @@ git ls-files --others --exclude-standard
 Dedupe into one `files` array. If it is empty, log that there is nothing to review and skip
 to Phase 8.
 
-Otherwise dispatch `ship-task`'s reviewer — it is already generic over its args, so this
-skill reuses it rather than carrying a second copy:
+Otherwise dispatch the `code-review` skill's `workflow.js` — the same reviewer
+`/claude-skills:code-review` runs, which this skill reuses rather than carrying a copy.
 
-Stage it in the scratchpad the same way as Phase 2 — the plugin-cache path is rejected by
-`Workflow` on its own:
+Stage it in the scratchpad first — `Workflow` rejects the plugin-cache path on its own:
 
 ```bash
-cp "<absolute dir of this SKILL.md>/../ship-task/workflow.js" "<scratchpad>/ship-task-workflow.js"
+cp "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
 ```
 
 ```
 Workflow({
-  scriptPath: "<scratchpad>/ship-task-workflow.js",
-  args: { files: <the diff list>, baseBranch: BASE_BRANCH, changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
+  scriptPath: "<scratchpad>/code-review-workflow.js",
+  args: { files: <the diff list>, baseBranch: BASE_BRANCH, effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
 })
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, planner (fable) drafts a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
+description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated high/opus code review runs, planner (fable) drafts a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
 argument-hint: "[what you want shipped]"
 ---
 
@@ -9,7 +9,7 @@ argument-hint: "[what you want shipped]"
 Take a task from description to an open, described PR through the existing agent team:
 `planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
 (opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
-code review runs at xhigh effort on opus; `planner` drafts a fix plan and YOU
+code review runs at high effort on opus; `planner` drafts a fix plan and YOU
 gate it; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
 `/draft-pr` → `/update-pr-description` ship it; `/compact-comments` runs last.
 
@@ -222,7 +222,7 @@ already independently verified, and each carries an `action`, so they are **acte
 Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final message —
 a finding it dropped or could not verify is part of the report, not noise.
 
-## Phase 2 — Code review (nested `Workflow`, xhigh + opus)
+## Phase 2 — Code review (nested `Workflow`, high + opus)
 
 Scout the diff inline first — the workflow script has no filesystem access. Union
 tracked changes with untracked new files, the same trap `lead-orchestrator`'s own Phase 3
@@ -240,17 +240,20 @@ Dedupe the two lists into one `files` array.
 
 If that combined list is empty, log that there is nothing to review and skip to Phase 5.
 
-Otherwise stage the script somewhere `Workflow` will accept, then dispatch.
+Otherwise dispatch the `code-review` skill's `workflow.js` — the same reviewer
+`/claude-skills:code-review` runs, which this skill reuses rather than carrying a copy.
+Stage it somewhere `Workflow` will accept first.
 
 `Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the
 working directory or a directory added to the session. When this skill is installed as a
 plugin its `workflow.js` lives under `~/.claude/plugins/cache/...`, which is neither, so
 passing that path directly fails with *"scriptPath must be a script path this tool
 returned, or a file you can already read"*. Copy it into the session scratchpad
-directory (the absolute path is given in your environment) and dispatch from there:
+directory (the absolute path is given in your environment) and dispatch from there,
+normalizing the source to an absolute path rather than leaving `..` for the runtime:
 
 ```bash
-cp "<absolute dir of this SKILL.md>/workflow.js" "<scratchpad>/ship-task-workflow.js"
+cp "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
 ```
 
 Do **not** copy it into the user's repo instead: an untracked file there would be picked
@@ -261,8 +264,8 @@ all, at the cost of ~3k tokens in this context.
 
 ```
 Workflow({
-  scriptPath: "<scratchpad>/ship-task-workflow.js",
-  args: { files: <the diff list>, baseBranch: BASE_BRANCH, changeNote: "<one-line summary of the lead's Outcome>", planPath: "<Phase 1 plan path>" },
+  scriptPath: "<scratchpad>/code-review-workflow.js",
+  args: { files: <the diff list>, baseBranch: BASE_BRANCH, effort: "high", changeNote: "<one-line summary of the lead's Outcome>", planPath: "<Phase 1 plan path>" },
 })
 ```
 

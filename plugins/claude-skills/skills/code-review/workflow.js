@@ -1,15 +1,15 @@
 export const meta = {
-  name: 'ship-task-review',
-  description: 'xhigh/opus code review: one finder per angle, adversarial verification per finding, then a gap sweep',
+  name: 'code-review',
+  description: 'opus code review: one finder per angle, adversarial verification per finding, then a gap sweep',
   phases: [{ title: 'Find' }, { title: 'Verify' }, { title: 'Sweep' }],
 }
 
-// Why not the built-in /code-review: it takes an effort level when a user types it, but
-// a pipeline cannot invoke a slash command, and the Agent tool has `model` but no
-// `effort`. Only agent() calls in a Workflow can pin both, so every call below does.
-// The finder angles and the sweep are adapted from the built-in's max-effort recipe.
+// Shared by /claude-skills:code-review, /ship-task and /address-pr-review-comments.
+// Why not the built-in /code-review: a pipeline cannot invoke a slash command, and the
+// Agent tool has `model` but no `effort`. Only agent() calls in a Workflow can pin both,
+// so every call below does. Angles and sweep are adapted from the built-in's max recipe.
 const MODEL = 'opus'
-const EFFORT = 'xhigh'
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 // Verified empirically in an earlier session (see project memory): `args` has arrived
 // as a JSON-encoded STRING even when passed as a genuine object literal at the call
@@ -21,7 +21,7 @@ if (typeof args === 'string') {
     parsedArgs = JSON.parse(args)
   } catch (e) {
     throw new Error(
-      `ship-task-review workflow could not parse its args string as JSON — ${(e && e.message) || e}; ` +
+      `code-review workflow could not parse its args string as JSON — ${(e && e.message) || e}; ` +
         `first 200 chars: ${args.slice(0, 200)}`,
     )
   }
@@ -31,7 +31,7 @@ if (typeof args === 'string') {
 
 if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) {
   throw new Error(
-    `ship-task-review workflow received args of type ${Array.isArray(parsedArgs) ? 'array' : typeof parsedArgs} — ` +
+    `code-review workflow received args of type ${Array.isArray(parsedArgs) ? 'array' : typeof parsedArgs} — ` +
       'expected an object with { files, baseBranch, changeNote, planPath }',
   )
 }
@@ -42,12 +42,23 @@ if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) 
 const files = parsedArgs.files
 
 if (!Array.isArray(files) || files.length === 0) {
-  throw new Error('ship-task-review workflow received no target files — verify the skill body passed a non-empty diff')
+  throw new Error('code-review workflow received no target files — verify the skill body passed a non-empty diff')
 }
 
 const baseBranch = typeof parsedArgs.baseBranch === 'string' && parsedArgs.baseBranch.trim() ? parsedArgs.baseBranch.trim() : 'main'
 const changeNote = typeof parsedArgs.changeNote === 'string' ? parsedArgs.changeNote : ''
 const planPath = typeof parsedArgs.planPath === 'string' ? parsedArgs.planPath : ''
+
+// Fail loud on a typo rather than silently reviewing at the wrong level.
+const EFFORT = parsedArgs.effort === undefined ? 'high' : parsedArgs.effort
+
+if (!EFFORT_LEVELS.includes(EFFORT)) {
+  throw new Error(`code-review workflow received effort ${JSON.stringify(EFFORT)} — expected one of ${EFFORT_LEVELS.join(', ')}`)
+}
+
+// Set only when reviewing a checkout other than the session's working directory (a PR worktree).
+const repoDir = typeof parsedArgs.repoDir === 'string' ? parsedArgs.repoDir.trim() : ''
+const diffCommand = typeof parsedArgs.diffCommand === 'string' && parsedArgs.diffCommand.trim() ? parsedArgs.diffCommand.trim() : `git diff origin/${baseBranch}`
 
 // Inline, not a guidelines/ directory — this isn't an extensible rule set; YAGNI.
 // `kind: 'bug'` findings state a concrete failure; `kind: 'cost'` ones state a concrete cost.
@@ -169,8 +180,12 @@ const VERDICT_SCHEMA = {
 
 const fileList = files.map(f => `- ${f}`).join('\n')
 
+const locationNote = repoDir
+  ? `The code under review is checked out at ${repoDir}, not in your working directory. Read files there and run git as \`git -C ${repoDir} …\`; every file path below is relative to it.\n\n`
+  : ''
+
 function contextBlock() {
-  return `Files changed:
+  return `${locationNote}Files changed:
 ${fileList}
 
 What changed: ${changeNote || 'no change note provided — review the files as given'}
@@ -183,13 +198,13 @@ function descriptionRule(dim) {
     : '`description` must state the concrete cost: what is duplicated, wasted, left untested, harder to maintain, or which rule is broken.'
 }
 
-const SHARED_RULES = `- Read the actual diff (\`git diff origin/${baseBranch}\` or per-file diffs) before reporting anything — do not guess from filenames.
+const SHARED_RULES = `- Read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
 - Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
-- \`line\` is the 1-based line number in the file as it exists now on this branch.
+- \`line\` is the 1-based line number in the file as it exists now in the code under review.
 - \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.`
 
 function findPrompt(dim) {
-  return `Review the diff between the current branch and origin/${baseBranch} for exactly ONE angle: ${dim.label}.
+  return `Review the change against origin/${baseBranch} for exactly ONE angle: ${dim.label}.
 
 ${contextBlock()}
 
@@ -208,7 +223,7 @@ function sweepPrompt(confirmed) {
     ? confirmed.map(f => `- ${f.file}:${f.line} [${f.dimension}] ${f.description}`).join('\n')
     : '- (none)'
 
-  return `You are a fresh reviewer sweeping for gaps in a code review of the diff between the current branch and origin/${baseBranch}.
+  return `You are a fresh reviewer sweeping for gaps in a code review of the change against origin/${baseBranch}.
 
 ${contextBlock()}
 
@@ -234,7 +249,7 @@ Line: ${f.line}
 Claim: ${f.description}
 Suggested fix: ${f.suggestedFix}
 
-Read the actual file content at that location, and the diff, before judging.
+${locationNote}Read the actual file content at that location, and the diff (\`${diffCommand}\`), before judging.
 
 Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; or the fix would not change behavior.
 
