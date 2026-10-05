@@ -15,8 +15,8 @@ The pipeline: fetch the unresolved threads → a fable verifier per comment (plu
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
 (opus) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan →
-`fast-worker` applies → `/git-commit` → push → `/update-pr-description` → one short reply
-per thread → `/compact-comments` (committed and pushed if it changed anything).
+`fast-worker` applies → `/compact-comments` → `/git-commit` → push →
+`/update-pr-description` → one short reply per thread.
 
 Everything happens on the **current branch and its existing PR**. This skill never
 creates a branch and never creates a PR.
@@ -443,9 +443,13 @@ STOP — do not commit, do not push, do not post replies. Report what failed and
 
 Strictly serial:
 
-1. `Skill({ skill: "claude-skills:git-commit", args: "<one-line hint: addressed PR review comments>" })`
-2. `git push` to the current branch. **Never** `/draft-pr` — the PR already exists.
-3. `Skill({ skill: "claude-skills:update-pr-description" })`
+1. `Skill({ skill: "claude-skills:compact-comments" })` — no args: it diffs against the
+   PR base itself, so its scope is every comment added in this PR. It runs before the
+   commit so its edits ship in the same SHA the replies cite, with the line numbers they
+   cite. No later phase edits code, so nothing can re-inflate what it trims.
+2. `Skill({ skill: "claude-skills:git-commit", args: "<one-line hint: addressed PR review comments>" })`
+3. `git push` to the current branch. **Never** `/draft-pr` — the PR already exists.
+4. `Skill({ skill: "claude-skills:update-pr-description" })`
 
 Record the pushed short SHA (`git rev-parse --short HEAD`); the replies cite it.
 
@@ -503,17 +507,6 @@ the conversation tab where the reviewer will not see it next to their comment.
 **Never call `resolveReviewThread`.** Resolving is the reviewer's call, and it is the only
 signal the already-answered guard in Phase 1 leaves them.
 
-## Phase 10 — Compact comments
-
-Runs last, after the replies are posted, so no later phase can re-inflate what it trims.
-Skip it if Phase 7's guard stopped the pipeline or no code changed (rebuttal-only path).
-
-1. `Skill({ skill: "claude-skills:compact-comments" })` — no args: it diffs against the
-   PR base itself, so its scope is every comment added in this PR.
-2. If `git status --porcelain` shows changes, `Skill({ skill: "claude-skills:git-commit",
-   args: "compact PR comments" })` then `git push`. Do not edit the posted replies — they
-   cite Phase 8's SHA, which still holds the fix.
-
 ## Final message to the user
 
 A table, one row per thread: reviewer comment (truncated), verdict, what was done, reply
@@ -525,5 +518,5 @@ any verdict still `needs-user-input` after Phase 2b, Phase 5b's `ts-check`/`gola
 findings (or "clean"/"skipped, no matching files"), Phase 5b's `test-check` findings and
 how each was resolved (plus its refuted/unchallenged/UNVERIFIED lists), the simplifier's
 summary, any `dimensionsUnverified` from Phase 6, any reply that could not be posted, and
-Phase 10's compact-comments report (with its follow-up commit SHA, if any). If Phase 7's
-guard stopped the pipeline, say that instead of reporting a commit.
+Phase 8's compact-comments report. If Phase 7's guard stopped the pipeline, say that
+instead of reporting a commit.

@@ -375,8 +375,11 @@ if Phase 5's guard stopped the pipeline.
 
 1. `Skill({ skill: "claude-skills:compact-comments" })` — no args: it diffs against the
    PR base itself, so its scope is every comment added in this PR.
-2. If `git status --porcelain` shows changes, `Skill({ skill: "claude-skills:git-commit",
-   args: "compact PR comments" })` then `git push`. If clean, there is nothing to ship.
+2. If its report lists edited files, `Skill({ skill: "claude-skills:git-commit", args:
+   "compact PR comments: <those files>" })` then `git push`. Pass exactly those files —
+   `git status --porcelain` would also list pre-existing dirty files from Phase 0 and any
+   untracked plan files, which this commit must not pick up. If it edited nothing, there
+   is nothing to ship.
 
 ## Final message to the user
 
