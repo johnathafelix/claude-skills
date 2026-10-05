@@ -1,14 +1,14 @@
 ---
 name: review-requests
-description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "👀 reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies "✅ <outcome>". Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 10 minutes. Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
+description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "👀 reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies "✅ <outcome>". Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 5 minutes (configurable). Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
 argument-hint: ""
 ---
 
 # Review requests
 
 One pass over the review-request channel. The first pass schedules the rest: it creates
-a session cron job that re-runs this skill every 10 minutes, so invoking it once is
-enough:
+a session cron job that re-runs this skill every `INTERVAL` minutes, so invoking it once
+is enough:
 
 ```
 /claude-skills:review-requests
@@ -28,6 +28,8 @@ approval to reply in the channel under their account, and to post reviews throug
 - **Channel:** `REVIEW_REQUESTS_CHANNEL_ID` set in the `env` block of
   `~/.claude/settings.json`. Never write the channel ID or the user's Slack ID into this
   repo.
+- **Interval (optional):** `REVIEW_REQUESTS_INTERVAL_MINUTES` in the same `env` block,
+  a whole number from 1 to 59. Default 5.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
   cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else
   `~/repos`.
@@ -38,6 +40,7 @@ approval to reply in the channel under their account, and to post reviews throug
 ```bash
 echo "$REVIEW_REQUESTS_CHANNEL_ID"
 echo "${REVIEW_REQUESTS_REPOS_DIR:-$HOME/repos}"
+echo "${REVIEW_REQUESTS_INTERVAL_MINUTES:-5}"
 ```
 
 No channel ID → stop: tell the user to set `REVIEW_REQUESTS_CHANNEL_ID` in
@@ -56,7 +59,10 @@ not connected or cannot read the channel, to reconnect it with `/mcp`, and to in
 skill again. Reviews already running keep
 going; their results are picked up by the next loop.
 
-Record `CHANNEL`, `REPOS_DIR`, `ME` and `STATE = <scratchpad>/review-requests`. Never
+`INTERVAL` is the third value; anything other than a whole number from 1 to 59 → stop
+and tell the user the allowed range.
+
+Record `CHANNEL`, `REPOS_DIR`, `INTERVAL`, `ME` and `STATE = <scratchpad>/review-requests`. Never
 print `CHANNEL` or `ME` in a Slack message or a PR comment.
 
 ## Step 1b — Keep the loop scheduled
@@ -64,8 +70,11 @@ print `CHANNEL` or `ME` in a Slack message or a PR comment.
 `CronList`. If no job's prompt contains `/claude-skills:review-requests`, create one:
 
 ```
-CronCreate({ cron: "*/10 * * * *", prompt: "/claude-skills:review-requests", recurring: true })
+CronCreate({ cron: "*/<INTERVAL> * * * *", prompt: "/claude-skills:review-requests", recurring: true })
 ```
+
+If one exists with a different schedule (the interval was changed), `CronDelete` it and
+create the new one.
 
 Tell the user the job ID, that the job lives only in this session (closing it stops the
 watch), and that a recurring job expires after 7 days. Skip this when the pass runs under
