@@ -26,8 +26,9 @@ approval to reply in the channel under their account, and to post reviews throug
 - **Channel:** `REVIEW_REQUESTS_CHANNEL_ID` set in the `env` block of
   `~/.claude/settings.json`. Never write the channel ID or the user's Slack ID into this
   repo.
-- **Local clones:** each PR's repo checked out at `<REPOS_DIR>/<repo>`. `REPOS_DIR` is
-  `REVIEW_REQUESTS_REPOS_DIR` if set, else `~/repos`.
+- **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
+  cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else
+  `~/repos`.
 - **Plugin up to date**, so the headless sessions can run `/claude-skills:review-pr`.
 
 ## Step 1 — Load config and check Slack
@@ -120,10 +121,14 @@ For each request taken:
 
 1. **PR URL** — the first PR URL in the message. If it has more, tell the user which ones
    were not reviewed.
-2. **Clone** — `CLONE = REPOS_DIR/<repo>`; `gh repo view --json nameWithOwner --jq .nameWithOwner`
-   run inside it must equal `<owner>/<repo>` (case-insensitive). If not, write
-   `STATE/<ts>.skipped`, tell the user there is no local clone, and leave the Slack
-   message untouched.
+2. **Clone** — `CLONE = REPOS_DIR/<repo>`.
+   - `CLONE` does not exist → `gh repo clone <owner>/<repo> "<CLONE>"`, and tell the user
+     it was cloned.
+   - `gh repo view --json nameWithOwner --jq .nameWithOwner` run inside `CLONE` must
+     equal `<owner>/<repo>` (case-insensitive).
+   - The clone failed, or `CLONE` holds a different repo → write `STATE/<ts>.skipped`,
+     tell the user why, and leave the Slack message untouched. Never delete or overwrite
+     an existing `CLONE`.
 3. **Acknowledge** — reply `👀 reviewing...` in its thread. Skip this when
    `STATE/<ts>.retry` exists (it was already acknowledged); delete that file instead.
 4. **Start** — write the URL to `STATE/<ts>.url`, then run with `Bash`
