@@ -157,10 +157,11 @@ const FINDINGS_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['file', 'line', 'description', 'suggestedFix'],
+        required: ['file', 'line', 'severity', 'description', 'suggestedFix'],
         properties: {
           file: { type: 'string' },
           line: { type: 'integer' },
+          severity: { type: 'string', enum: ['issue', 'nit'] },
           description: { type: 'string' },
           suggestedFix: { type: 'string' },
         },
@@ -175,7 +176,15 @@ const VERDICT_SCHEMA = {
   properties: {
     refuted: { type: 'boolean' },
     reason: { type: 'string' },
+    severity: { type: 'string', enum: ['issue', 'nit'] },
   },
+}
+
+// `review-pr` approves a PR whose findings are all nits, so severity only ever moves up.
+const SEVERITY_RANK = { nit: 0, issue: 1 }
+
+function higherSeverity(a, b) {
+  return (SEVERITY_RANK[b] ?? 1) > (SEVERITY_RANK[a] ?? 1) ? b : a
 }
 
 const fileList = files.map(f => `- ${f}`).join('\n')
@@ -201,7 +210,8 @@ function descriptionRule(dim) {
 const SHARED_RULES = `- Read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
 - Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
 - \`line\` is the 1-based line number in the file as it exists now in the code under review.
-- \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.`
+- \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.
+- \`severity\`: "issue" for wrong behavior, a crash, data loss, a security hole, a test gap that would let a regression through, a broken CLAUDE.md rule, or docs/comments that point readers at the wrong code. "nit" only when it has no effect on behavior or correctness — small duplication, naming, comment wording, a simpler equivalent form. When unsure, use "issue".`
 
 function findPrompt(dim) {
   return `Review the change against origin/${baseBranch} for exactly ONE angle: ${dim.label}.
@@ -246,14 +256,17 @@ function verifyPrompt(f, dim) {
 Angle: ${dim.label}
 File: ${f.file}
 Line: ${f.line}
+Severity claimed: ${f.severity}
 Claim: ${f.description}
 Suggested fix: ${f.suggestedFix}
 
 ${locationNote}Read the actual file content at that location, and the diff (\`${diffCommand}\`), before judging.
 
-Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; or the fix would not change behavior.
+Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; for an issue, the fix would not change behavior; for a nit, the stated cost (duplication, naming, wording) is not actually there.
 
-Do not refute merely because the trigger depends on runtime state when that state is realistic — concurrency races, nil/undefined on a rare but reachable path, falsy-zero treated as missing, an off-by-one on a boundary the code does not exclude, partial failures. Confirm (refuted: false) only if you independently verified the problem exists as described.`
+Do not refute merely because the trigger depends on runtime state when that state is realistic — concurrency races, nil/undefined on a rare but reachable path, falsy-zero treated as missing, an off-by-one on a boundary the code does not exclude, partial failures. Confirm (refuted: false) only if you independently verified the problem exists as described.
+
+If you confirm a "nit" that actually affects behavior or correctness, set severity: "issue". Never downgrade an "issue" to a nit; omit severity to keep the claimed one.`
 }
 
 // Verifies every finding concurrently, one adversarial agent each, with no cap.
@@ -287,7 +300,9 @@ async function verifyAll(findings, dim) {
       continue
     }
 
-    if (verdict.refuted === false) confirmed.push({ ...f, dimension: dim.key })
+    if (verdict.refuted === false) {
+      confirmed.push({ ...f, severity: higherSeverity(f.severity, verdict.severity ?? f.severity), dimension: dim.key })
+    }
   }
 
   return confirmed
@@ -399,6 +414,7 @@ for (const f of findings) {
   }
 
   first.dimension += `, ${f.dimension}`
+  first.severity = higherSeverity(first.severity, f.severity)
   first.description += `\n\nAlso flagged by ${f.dimension}: ${f.description}`
   first.suggestedFix += `\n\n(${f.dimension}) ${f.suggestedFix}`
 }
