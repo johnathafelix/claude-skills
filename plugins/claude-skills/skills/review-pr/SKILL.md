@@ -206,3 +206,21 @@ event.
   was not approved.
 - `test-check` `unchallenged` items (not posted), and how many language-check findings
   the verifier refuted.
+
+End every run, including one that stopped early, with this as its last line so a caller
+(e.g. `review-requests`) can read the outcome:
+
+```
+REVIEW_RESULT: <outcome>
+```
+
+| Outcome | When |
+|---|---|
+| `approved` | posted `APPROVE` with no comments |
+| `approved_nits` | posted `APPROVE` with nit comments |
+| `commented` | posted `COMMENT` |
+| `no_findings` | zero findings, not `CAN_APPROVE`; nothing posted |
+| `merged` / `closed` | Step 2 found the PR `MERGED` / `CLOSED` |
+| `already_reviewed` | Step 2 found a review of yours on this head |
+| `head_moved` | Step 7 found the head moved; nothing posted |
+| `error` | anything else that stopped the run, including a rejected post |
