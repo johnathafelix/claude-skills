@@ -28,6 +28,8 @@ approval to reply in the channel under their account, and to post reviews throug
 - **Channel:** `REVIEW_REQUESTS_CHANNEL_ID` set in the `env` block of
   `~/.claude/settings.json`. Never write the channel ID or the user's Slack ID into this
   repo.
+- **User ID (recommended):** `REVIEW_REQUESTS_USER_ID` in the same `env` block — the
+  user's Slack ID, used only to skip their own messages.
 - **Interval (optional):** `REVIEW_REQUESTS_INTERVAL_MINUTES` in the same `env` block,
   a whole number from 1 to 59. Default 5.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
@@ -41,23 +43,25 @@ approval to reply in the channel under their account, and to post reviews throug
 echo "$REVIEW_REQUESTS_CHANNEL_ID"
 echo "${REVIEW_REQUESTS_REPOS_DIR:-$HOME/repos}"
 echo "${REVIEW_REQUESTS_INTERVAL_MINUTES:-5}"
+echo "$REVIEW_REQUESTS_USER_ID"
 ```
 
 No channel ID → stop: tell the user to set `REVIEW_REQUESTS_CHANNEL_ID` in
 `~/.claude/settings.json`.
 
-Then check the connector, every pass:
+`ME`, the user's Slack ID: the fourth value if set. Otherwise take it from the Slack
+connector's own tool descriptions, which state "Current logged in user's user_id is
+U…". Never call `slack_read_user_profile` — it returns the user's whole profile (email,
+phone) when only the ID is needed. Neither source gives an ID → stop the loop (below) and
+tell the user to set `REVIEW_REQUESTS_USER_ID`.
 
-1. `slack_read_user_profile` with no `user_id` and `response_format: detailed` → `ME`, its
-   `User ID` (the concise format omits it).
-2. `slack_read_channel` with `channel_id: CHANNEL`, `limit: 1`.
-
-Either call missing, failing, or asking to authenticate → stop the loop (`CronList`, then
-`CronDelete` the job whose prompt contains `/claude-skills:review-requests`; in dynamic
-`/loop` mode, `ScheduleWakeup` with `stop: true`) and tell the user the Slack connector is
-not connected or cannot read the channel, to reconnect it with `/mcp`, and to invoke this
-skill again. Reviews already running keep
-going; their results are picked up by the next loop.
+Then check the connector, every pass: `slack_read_channel` with `channel_id: CHANNEL`,
+`limit: 1`. Missing, failing, or asking to authenticate → **stop the loop**: `CronList`,
+then `CronDelete` the job whose prompt contains `/claude-skills:review-requests` (in
+dynamic `/loop` mode, `ScheduleWakeup` with `stop: true`). Tell the user the Slack
+connector is not connected or cannot read the channel, to reconnect it with `/mcp`, and to
+invoke this skill again. Reviews already running keep going; their results are picked up
+by the next loop.
 
 `INTERVAL` is the third value; anything other than a whole number from 1 to 59 → stop
 and tell the user the allowed range.
@@ -86,10 +90,19 @@ a dynamic `/loop` (one paced with `ScheduleWakeup`), which already repeats it.
 this session, so a new session starts a new watch.
 
 - Missing → `mkdir -p STATE` and write `$(date +%s).000000` to it. Tell the user the watch
-  started and end this pass: nothing older is picked up.
+  started, then **STOP: this pass is over. Do not run Steps 3–5.** Nothing older than
+  now is picked up, so there is nothing to scan yet.
 - Present → `SINCE` = its contents.
 
 ## Step 3 — Finish completed reviews
+
+Count and list `STATE` files with `find`, never a shell glob — zsh errors with "no
+matches found" when a glob matches nothing:
+
+```bash
+find "<STATE>" -name '*.out'            # completed reviews
+find "<STATE>" -name '*.tmp' | wc -l    # running reviews
+```
 
 Each started review has, under `STATE`, `<ts>.url` (the PR URL) and, while it runs,
 `<ts>.tmp`. It becomes `<ts>.out` when the headless session exits. For every
