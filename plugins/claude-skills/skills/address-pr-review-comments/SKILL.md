@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `deep-reasoner` designs a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
+description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -14,8 +14,8 @@ mistake into the codebase, so nothing gets planned until it survives verificatio
 The pipeline: fetch the unresolved threads → a fable verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
-(opus) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan
-and YOU gate it → `fast-worker` applies → `/compact-comments` → `/git-commit` → push →
+(opus) implements → xhigh/opus code review on the new code → `planner` fix plan and
+YOU gate it → `fast-worker` applies → `/compact-comments` → `/git-commit` → push →
 `/update-pr-description` → one short reply per thread.
 
 Everything happens on the **current branch and its existing PR**. This skill never
@@ -376,28 +376,21 @@ review does not skip the test fixes, and vice versa.
 
 ## Phase 7 — Fix the review findings
 
-**7a — Fix plan (`deep-reasoner`, opus, user-approved).** Spawn
-`claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`. Give it
-the confirmed findings (file, line, description, suggestedFix, dimension), `TEST_FINDINGS`
-from 5b (file, line–endLine, rule, description, rationale, action — the `action` is the fix
-to plan; for `coverage` findings it names the uncovered ranges to write tests for), and the
-Phase 4d plan path, and require wave-structured output:
+**7a — Fix plan (`planner`, fable, user-approved).** Spawn `claude-skills:planner` with
+`model: "fable"` and `run_in_background: false`. The prompt must be self-contained, as in
+4a: the confirmed findings (file, line, description, suggestedFix, dimension),
+`TEST_FINDINGS` from 5b (file, line–endLine, rule, description, rationale, action — the
+`action` is the fix to plan; for `coverage` findings it names the uncovered ranges to write
+tests for), the Phase 4d plan path, the current working directory, `BASE_BRANCH`, and
+`PR_NUMBER`. State explicitly that **the plan must be scoped to these findings only**. It
+returns its standard plan document, whose wave-based task breakdown 7b executes.
 
-```
-### Wave N
-**T1 — <one-line objective>**
-- Files: <exact paths>
-- Do: <what to change>
-- Verify: <command and expected result>
-```
-
-Group independent fixes (disjoint files) into one wave; serialize fixes touching the same
-file. Test fixes must satisfy the guideline that raised them, not just silence it: a
-`db-integration` finding is fixed by a test against a real engine (reuse the repo's
-existing harness if the finding names one), an `assertion-strictness` finding by the actual
-value or a typed matcher, a `mock-expectations` finding by asserting both halves, a
+Test fixes must satisfy the guideline that raised them, not just silence it — put this in
+the prompt: a `db-integration` finding is fixed by a test against a real engine (reuse the
+repo's existing harness if the finding names one), an `assertion-strictness` finding by the
+actual value or a typed matcher, a `mock-expectations` finding by asserting both halves, a
 `coverage` finding by tests that exercise the named ranges with real assertions.
-`deep-reasoner` is analysis-only, so write its returned text to
+`planner` is read-only, so write its returned document verbatim to
 `.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes-followup.md` yourself.
 
 Gate it: print the plan in full, followed by the findings it covers (file:line, dimension,
@@ -405,19 +398,21 @@ description), then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes
 *Skip fixes*. This is `AskUserQuestion`, not `ExitPlanMode`, because approval in 4b already left plan mode.
 
 - **Approve** — continue to 7b.
-- **Revise** — re-spawn `deep-reasoner` with the same inputs plus the user's notes,
-  overwrite the same file, and gate again.
+- **Revise** — re-spawn `planner` with the previous plan plus the user's notes verbatim,
+  overwrite the same file, and gate again. If the plan's first section is
+  `## Open questions`, put the questions to the user and pass the answers back the same way.
 - **Skip fixes** — apply nothing; go straight to 7c and record every finding and
   `TEST_FINDINGS` entry as *skipped by the user*.
 
-**7b — Apply (`fast-worker`, sonnet).** **One wave = one message containing that wave's
+**7b — Apply (`fast-worker` / `deep-reasoner`, per task).** **One wave = one message containing that wave's
 `Agent` calls, every one with `run_in_background: false`.** That is the wave barrier:
 multiple calls in one message give concurrency within the wave, and
 `run_in_background: false` is what stops wave N+1 from dispatching before wave N's files
-exist. Cap at 5 concurrent.
+exist. Cap at 5 concurrent. Each task goes to the executor the plan marks: `fast-worker`
+with `model: "sonnet"`, or `deep-reasoner` with `model: "opus"`.
 
 ```
-Agent({ subagent_type: "claude-skills:fast-worker", model: "sonnet", run_in_background: false, prompt: `
+Agent({ subagent_type: "claude-skills:<executor>", model: "<sonnet|opus>", run_in_background: false, prompt: `
 Task: <task id and objective>
 Plan: read <absolute followup-plan path>, task <T-n> applies to you
 Files: <exact paths to touch>

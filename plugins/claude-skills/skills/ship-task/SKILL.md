@@ -1,6 +1,6 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
+description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, planner (fable) drafts a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
 argument-hint: "[what you want shipped]"
 ---
 
@@ -9,8 +9,8 @@ argument-hint: "[what you want shipped]"
 Take a task from description to an open, described PR through the existing agent team:
 `planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
 (opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
-code review runs at xhigh effort on opus; `deep-reasoner` designs a fix plan
-and YOU gate it; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
+code review runs at xhigh effort on opus; `planner` drafts a fix plan and YOU
+gate it; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
 `/draft-pr` → `/update-pr-description` ship it; `/compact-comments` runs last.
 
 **This skill spans many turns** — your own plan-approval dialog in Phase 1, and a
@@ -280,33 +280,26 @@ If `findingCount` is 0 **and** `TEST_FINDINGS` from 1g is empty, log that the re
 clean and skip to Phase 5. If either list is non-empty, continue to Phase 3 with whichever
 lists have entries — a clean code review does not skip the test fixes, and vice versa.
 
-## Phase 3 — Fix plan (`deep-reasoner`, opus, user-approved)
+## Phase 3 — Fix plan (`planner`, fable, user-approved)
 
-Spawn `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`.
-Give it: the confirmed findings from Phase 2 (file, line, description, suggestedFix,
-dimension), `TEST_FINDINGS` from 1g (file, line–endLine, rule, description, rationale,
-action — the `action` is the fix to plan; for `coverage` findings it names the uncovered
-ranges to write tests for), the Phase 1 plan path for context on intended behavior, and an
-explicit instruction to structure its output as **waves**, matching `lead-orchestrator`'s own
-task-breakdown format so Phase 4 can execute it the same way:
+Spawn `claude-skills:planner` with `model: "fable"` and `run_in_background: false`.
+Subagents see nothing of this conversation, so the prompt must be self-contained: the
+confirmed findings from Phase 2 (file, line, description, suggestedFix, dimension),
+`TEST_FINDINGS` from 1g (file, line–endLine, rule, description, rationale, action — the
+`action` is the fix to plan; for `coverage` findings it names the uncovered ranges to
+write tests for), the Phase 1 plan path for context on intended behavior, the current
+working directory, and `BASE_BRANCH`. State explicitly that **the plan must be scoped to
+these findings only** — no adjacent refactors, no drive-by improvements. It returns its
+standard plan document, whose wave-based task breakdown Phase 4 executes.
 
-```
-### Wave N
-**T1 — <one-line objective>**
-- Files: <exact paths>
-- Do: <what to change>
-- Verify: <command and expected result>
-```
+Test fixes must satisfy the guideline that raised them, not just silence it — put this in
+the prompt: a `db-integration` finding is fixed by a test against a real engine (reuse the
+repo's existing harness if the finding names one), an `assertion-strictness` finding by
+the actual value or a typed matcher, a `mock-expectations` finding by asserting both
+halves, a `coverage` finding by tests that exercise the named ranges with real assertions.
 
-Group independent fixes (disjoint files) into the same wave; serialize fixes that touch
-the same file. Test fixes must satisfy the guideline that raised them, not just silence
-it: a `db-integration` finding is fixed by a test against a real engine (reuse the repo's
-existing harness if the finding names one), an `assertion-strictness` finding by the
-actual value or a typed matcher, a `mock-expectations` finding by asserting both halves,
-a `coverage` finding by tests that exercise the named ranges with real assertions.
-
-`deep-reasoner` is analysis-only and will not write files itself — write its returned
-text to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself.
+`planner` is read-only and will not write files itself — write its returned document
+verbatim to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself.
 
 **Gate it.** Print the fixes plan in full, followed by the findings it covers (file:line,
 dimension, description), so the user can check it does not diverge from what the review
@@ -314,12 +307,14 @@ found. Then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes)* / *S
 fixes*. This is `AskUserQuestion`, not `ExitPlanMode`, for the same reason as 1f.
 
 - **Approve** — continue to Phase 4.
-- **Revise** — re-spawn `deep-reasoner` with the same inputs plus the user's notes,
-  overwrite the same fixes file, and gate again.
+- **Revise** — re-spawn `planner` with the previous plan plus the user's notes verbatim,
+  overwrite the same fixes file, and gate again. If the plan's first section is
+  `## Open questions`, that is the planner asking: put the questions to the user and
+  pass the answers back the same way.
 - **Skip fixes** — apply nothing; go straight to Phase 5 and record every finding and
   `TEST_FINDINGS` entry as *skipped by the user*.
 
-## Phase 4 — Apply fixes (`fast-worker`, sonnet)
+## Phase 4 — Apply fixes (`fast-worker` / `deep-reasoner`, per task)
 
 Execute the fixes plan's waves. **One wave = one message containing that wave's `Agent`
 calls, every one with `run_in_background: false`.** This is the wave barrier: multiple
@@ -327,10 +322,11 @@ calls in one message give concurrency within the wave; `run_in_background: false
 each is what stops wave N+1 from dispatching before wave N's files exist (the `Agent`
 tool backgrounds by default). Cap at 5 concurrent, matching `lead-orchestrator`.
 
-Each task:
+Each task goes to the executor the plan marks: `fast-worker` with `model: "sonnet"`, or
+`deep-reasoner` with `model: "opus"` for reasoning-heavy fixes.
 
 ```
-Agent({ subagent_type: "claude-skills:fast-worker", model: "sonnet", run_in_background: false, prompt: `
+Agent({ subagent_type: "claude-skills:<executor>", model: "<sonnet|opus>", run_in_background: false, prompt: `
 Task: <task id and objective>
 Plan: read <absolute fixes-plan path>, task <T-n> applies to you
 Files: <exact paths to touch>
