@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
 argument-hint: "<PR URL> [low|medium|high|xhigh|max]"
 ---
 
@@ -32,7 +32,7 @@ the turn on its task ID — wait for the completion notification, then post and 
 gh pr view <url> --json number,state,isDraft,author,headRefOid,title,baseRefName
 gh api user --jq .login
 gh api --paginate "repos/$OWNER/$REPO/pulls/$PR_NUMBER/reviews" \
-  --jq '.[] | select(.user.login == "<me>") | .commit_id'
+  --jq '.[] | select(.user.login == "<me>") | {commit_id, body}'
 ```
 
 - `state` is not `OPEN` → stop: there is nothing to review or approve.
@@ -42,6 +42,20 @@ gh api --paginate "repos/$OWNER/$REPO/pulls/$PR_NUMBER/reviews" \
   your own PR; a draft is not ready). Otherwise `CAN_APPROVE = true`.
 
 Record `HEAD_SHA = headRefOid` — the review is pinned to it.
+
+If you have earlier reviews on this PR, fetch your inline comments too, with your
+replies and the PR author's (`<author>` = `author.login`) replies in those threads. An outdated comment has no `line`,
+so fall back to `original_line`:
+
+```bash
+gh api --paginate "repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments" \
+  --jq '.[] | select(.user.login == "<me>" or (.user.login == "<author>" and .in_reply_to_id != null))
+        | {id, in_reply_to_id, user: .user.login, path, line: (.line // .original_line), body}'
+```
+
+Record `PRIOR`: your comments, each with the author's replies in its thread (a reply's
+`in_reply_to_id` is the thread's first comment), plus the **Outside this PR's diff**
+entries in your review bodies. It is empty on a first review.
 
 ## Step 3 — Run the code review
 
@@ -107,6 +121,21 @@ sets — code review, verified language checks, test-check — merging any that 
 `file:line`: one finding, every dimension listed, the higher severity, each source's text
 kept.
 
+## Step 3d — Skip what you already reported
+
+Drop a finding when a `PRIOR` entry on the same file reports the same problem. Match on
+the problem, not the line number: lines shift between pushes. A finding that only looks
+like an earlier one (a different trigger or a different fix) stays.
+
+A dropped finding is **addressed** when the author replied in its thread, after your
+last comment there, declining the change or explaining why the code stays as it is. A
+reply that agrees or promises a fix ("will do", "good catch") does not count.
+
+`STILL_OPEN` = the dropped findings with severity `issue` that are not addressed. They
+are still in the code, so they block approval in Step 6. They are not posted again,
+since your earlier comment is still on the PR. From here on, "findings" means only the
+ones left.
+
 ## Step 4 — Place each finding
 
 GitHub accepts inline comments only on lines inside the PR's diff. Map them with the
@@ -161,10 +190,14 @@ UNVERIFIED; the verify-only run's `dimensionsUnverified` is non-empty; or a `tes
 worktree without `node_modules`) does **not** count — report it to the user, but it does
 not block approval.
 
+The first row that matches decides:
+
 | Situation | Event | Posts |
 |---|---|---|
 | something did not run | `COMMENT` | the comments; never approve when part of the review did not run |
 | any `issue` | `COMMENT` | the comments |
+| `STILL_OPEN` not empty, no findings | — | nothing; your earlier comments are still on the PR |
+| `STILL_OPEN` not empty, only nits | `COMMENT` | the nit comments; never approve while an earlier issue is still open |
 | only nits, `CAN_APPROVE` | `APPROVE` | the nit comments |
 | zero findings, `CAN_APPROVE` | `APPROVE` | no comments, empty body |
 | zero findings, not `CAN_APPROVE` | — | nothing; report clean to the user |
@@ -206,6 +239,8 @@ event.
   was not approved.
 - `test-check` `unchallenged` items (not posted), and how many language-check findings
   the verifier refuted.
+- How many findings were skipped as already reported, and one line per `STILL_OPEN`
+  issue.
 
 End every run, including one that stopped early, with this as its last line so a caller
 (e.g. `review-requests`) can read the outcome:
@@ -220,6 +255,7 @@ REVIEW_RESULT: <outcome>
 | `approved_nits` | posted `APPROVE` with nit comments |
 | `commented` | posted `COMMENT` |
 | `no_findings` | zero findings, not `CAN_APPROVE`; nothing posted |
+| `still_open` | `STILL_OPEN` not empty and no findings; nothing posted |
 | `merged` / `closed` | Step 2 found the PR `MERGED` / `CLOSED` |
 | `already_reviewed` | Step 2 found a review of yours on this head |
 | `head_moved` | Step 7 found the head moved; nothing posted |
