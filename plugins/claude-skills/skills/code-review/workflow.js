@@ -383,13 +383,33 @@ try {
   dimensionsUnverified.push(SWEEP.key)
 }
 
-findings.sort((a, b) => {
+// Angles overlap (a stale doc pointer is both a line-scan and a conventions finding), so
+// merge confirmed findings on the same file:line. Each angle's text is kept, since two
+// angles can flag different defects on one line.
+const merged = new Map()
+
+for (const f of findings) {
+  const key = `${f.file}:${f.line}`
+  const first = merged.get(key)
+
+  if (!first) {
+    merged.set(key, { ...f })
+
+    continue
+  }
+
+  first.dimension += `, ${f.dimension}`
+  first.description += `\n\nAlso flagged by ${f.dimension}: ${f.description}`
+  first.suggestedFix += `\n\n(${f.dimension}) ${f.suggestedFix}`
+}
+
+const deduped = [...merged.values()].sort((a, b) => {
   if (a.file !== b.file) return a.file < b.file ? -1 : 1
   return a.line - b.line
 })
 
 return {
-  findings,
-  findingCount: findings.length,
+  findings: deduped,
+  findingCount: deduped.length,
   dimensionsUnverified: dimensionsUnverified.sort(),
 }

@@ -114,7 +114,9 @@ N. `file:line` [dimension]
    Fix:  <suggestedFix>
 ```
 
-In PR mode, paths are relative to the repo root, not to the worktree.
+In PR mode, paths are relative to the repo root, not to the worktree. A finding several
+angles confirmed on the same line arrives already merged: its dimension lists every angle,
+and each angle's description and fix are kept.
 
 If `dimensionsUnverified` is non-empty, list those angles under **Not verified** and say
 plainly that an unverified angle is not a clean pass. With zero findings and nothing
