@@ -64,7 +64,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
 | `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
 | `check-rest-api-design` | Review a REST/HTTP API against design best practices |
-| `humanizer` | Remove signs of AI-generated writing; make text sound human (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
+| `humanizer` | Remove signs of AI-generated writing; make text sound human, direct, and concise (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
 | `simplify-code` | Dispatch the `code-simplifier` agent to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
