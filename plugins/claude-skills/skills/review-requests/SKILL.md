@@ -1,15 +1,17 @@
 ---
 name: review-requests
-description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "👀 reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies "✅ <outcome>". Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Meant to run under /loop, e.g. `/loop 10m /claude-skills:review-requests`. Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
+description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "👀 reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies "✅ <outcome>". Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 10 minutes. Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
 argument-hint: ""
 ---
 
 # Review requests
 
-One pass over the review-request channel. Run it under `/loop` so it repeats:
+One pass over the review-request channel. The first pass schedules the rest: it creates
+a session cron job that re-runs this skill every 10 minutes, so invoking it once is
+enough:
 
 ```
-/loop 10m /claude-skills:review-requests
+/claude-skills:review-requests
 ```
 
 Each pass finishes the reviews that are done, then starts reviews for new requests. The
@@ -48,12 +50,26 @@ Then check the connector, every pass:
 2. `slack_read_channel` with `channel_id: CHANNEL`, `limit: 1`.
 
 Either call missing, failing, or asking to authenticate → stop the loop (`CronList`, then
-`CronDelete` its job; in dynamic `/loop` mode, `ScheduleWakeup` with `stop: true`) and tell the user the Slack connector is not connected or cannot read the channel, to
-reconnect it with `/mcp`, and to start the loop again. Reviews already running keep
+`CronDelete` the job whose prompt contains `/claude-skills:review-requests`; in dynamic
+`/loop` mode, `ScheduleWakeup` with `stop: true`) and tell the user the Slack connector is
+not connected or cannot read the channel, to reconnect it with `/mcp`, and to invoke this
+skill again. Reviews already running keep
 going; their results are picked up by the next loop.
 
 Record `CHANNEL`, `REPOS_DIR`, `ME` and `STATE = <scratchpad>/review-requests`. Never
 print `CHANNEL` or `ME` in a Slack message or a PR comment.
+
+## Step 1b — Keep the loop scheduled
+
+`CronList`. If no job's prompt contains `/claude-skills:review-requests`, create one:
+
+```
+CronCreate({ cron: "*/10 * * * *", prompt: "/claude-skills:review-requests", recurring: true })
+```
+
+Tell the user the job ID, that the job lives only in this session (closing it stops the
+watch), and that a recurring job expires after 7 days. Skip this when the pass runs under
+a dynamic `/loop` (one paced with `ScheduleWakeup`), which already repeats it.
 
 ## Step 2 — Start time
 
