@@ -1,22 +1,15 @@
 export const meta = {
   name: 'ship-task-review',
-  description: 'xhigh/opus code review: one finder per dimension, adversarial verification per finding',
-  phases: [{ title: 'Find' }, { title: 'Verify' }],
+  description: 'xhigh/opus code review: one finder per angle, adversarial verification per finding, then a gap sweep',
+  phases: [{ title: 'Find' }, { title: 'Verify' }, { title: 'Sweep' }],
 }
 
-// This script exists for exactly one reason: `effort` (xhigh) is only settable on this
-// hook's agent() calls — the Agent tool has `model` but no `effort`, and the built-in
-// /code-review workflow has no effort override either. Every agent() call below pins
-// both explicitly; that pin is the entire point of not using the built-in reviewer.
+// Why not the built-in /code-review: it takes an effort level when a user types it, but
+// a pipeline cannot invoke a slash command, and the Agent tool has `model` but no
+// `effort`. Only agent() calls in a Workflow can pin both, so every call below does.
+// The finder angles and the sweep are adapted from the built-in's max-effort recipe.
 const MODEL = 'opus'
 const EFFORT = 'xhigh'
-
-// Verifiers run one per finding, adversarially, at opus+xhigh — the most expensive
-// agents in this pipeline. Finders are unbounded (report what you find), so without a
-// cap here, 5 finders returning 8 findings each is 45 opus/xhigh agents from a single
-// /ship-task run. Cap the total across all dimensions combined and log what's dropped
-// — silent truncation would read as "verified everything" when it didn't.
-const MAX_VERIFIERS = 10
 
 // Verified empirically in an earlier session (see project memory): `args` has arrived
 // as a JSON-encoded STRING even when passed as a genuine object literal at the call
@@ -56,35 +49,94 @@ const baseBranch = typeof parsedArgs.baseBranch === 'string' && parsedArgs.baseB
 const changeNote = typeof parsedArgs.changeNote === 'string' ? parsedArgs.changeNote : ''
 const planPath = typeof parsedArgs.planPath === 'string' ? parsedArgs.planPath : ''
 
-// One-off, 5-dimension review — inline, not a guidelines/ directory. Unlike ts-check /
-// golang-check this isn't an extensible rule set someone adds to over time; YAGNI.
+// Inline, not a guidelines/ directory — this isn't an extensible rule set; YAGNI.
+// `kind: 'bug'` findings state a concrete failure; `kind: 'cost'` ones state a concrete cost.
 const DIMENSIONS = [
   {
-    key: 'correctness',
-    label: 'correctness & bugs',
-    prompt: 'Look for logic errors, off-by-one mistakes, wrong conditionals, broken assumptions between functions, and edge cases the code does not handle.',
+    key: 'line-scan',
+    label: 'line-by-line diff scan',
+    kind: 'bug',
+    prompt: 'Read every hunk line by line, then read the enclosing function of each hunk — bugs in unchanged lines of a touched function are in scope (the change re-exposes or fails to fix them). For every line ask: what input, state, timing, or platform makes this line wrong? Look for inverted or wrong conditions, off-by-one, null/undefined dereference, missing `await`, falsy-zero checks, wrong-variable copy-paste, and unescaped regex metacharacters.',
+  },
+  {
+    key: 'removed-behavior',
+    label: 'removed behavior',
+    kind: 'bug',
+    prompt: 'For every line the diff deletes or replaces, name the invariant or behavior it enforced, then search the new code for where that invariant is re-established. If you cannot find it, that is a finding: a removed guard, a dropped error path, a narrowed validation, a deleted test that covered a real case.',
+  },
+  {
+    key: 'cross-file',
+    label: 'cross-file callers and callees',
+    kind: 'bug',
+    prompt: 'For each function the diff changes, find its callers (Grep for the symbol) and check whether the change breaks any call site: a new precondition, a changed return shape, a new exception, a timing or ordering dependency. Also check callees: does a parallel change in the same diff make a call unsafe?',
+  },
+  {
+    key: 'language-pitfalls',
+    label: 'language and framework pitfalls',
+    kind: 'bug',
+    prompt: 'Scan for the classic pitfalls of the diff\'s language and framework — for example JS falsy-zero, `==` coercion, closure-captured loop variables; Python mutable default args, late-binding closures; Go nil-map writes, range-variable capture; SQL injection; timezone/DST drift; float equality. Flag any instance the diff introduces.',
+  },
+  {
+    key: 'wrapper-proxy',
+    label: 'wrapper and proxy correctness',
+    kind: 'bug',
+    prompt: 'When the diff adds or modifies a type that wraps another (cache, proxy, decorator, adapter), check that every method routes to the wrapped instance and not back through a registry, session, or global — e.g. a caching provider holding a `delegate` field that resolves IDs via `session.get(...)` instead of `delegate.get(...)` re-enters the cache or recurses. Also check that the wrapper forwards every method its callers actually use. Return nothing if the diff touches no wrapper.',
   },
   {
     key: 'error-handling',
     label: 'error handling & silent failures',
+    kind: 'bug',
     prompt: 'Look for swallowed errors, empty catch blocks, inappropriate fallback values that mask real failures, and error paths that log but do not actually handle the problem.',
   },
   {
     key: 'security',
     label: 'security',
+    kind: 'bug',
     prompt: 'Look for injection risks, unsafe deserialization, secrets or credentials committed in plaintext, missing authorization checks, and unsafe use of user input.',
   },
   {
     key: 'tests',
     label: 'tests & coverage',
+    kind: 'cost',
     prompt: 'Look for missing tests on new behavior, tests that do not actually assert the behavior they claim to, and edge cases the plan calls for that have no corresponding test.',
   },
   {
-    key: 'cleanup',
-    label: 'cleanup & simplification',
-    prompt: 'Look for dead code, needless duplication, over-engineered abstractions for single-use code, and code that could be meaningfully simpler without losing functionality.',
+    key: 'reuse',
+    label: 'reuse',
+    kind: 'cost',
+    prompt: 'Flag new code that duplicates a helper the codebase already has — Grep shared/utility modules and files adjacent to the change, and name the existing helper to call instead.',
+  },
+  {
+    key: 'simplification',
+    label: 'simplification',
+    kind: 'cost',
+    prompt: 'Flag unnecessary complexity the diff adds: redundant or derivable state, copy-paste with slight variation, deep nesting, dead code left behind. Name the simpler form that does the same job.',
+  },
+  {
+    key: 'efficiency',
+    label: 'efficiency',
+    kind: 'cost',
+    prompt: 'Flag wasted work the diff introduces: redundant computation or repeated I/O, independent operations run sequentially, blocking work added to startup or hot paths. Also flag long-lived objects built from closures that keep a large enclosing scope alive; prefer a type that copies only the fields it needs. Name the cheaper alternative.',
+  },
+  {
+    key: 'altitude',
+    label: 'altitude (root cause vs symptom)',
+    kind: 'cost',
+    prompt: 'Check that each change fixes the root cause at the right depth rather than patching a symptom. Special cases layered on shared infrastructure are a sign the fix is not deep enough — name the simpler, more general change to the underlying mechanism.',
+  },
+  {
+    key: 'conventions',
+    label: 'CLAUDE.md conventions',
+    kind: 'cost',
+    prompt: 'Find the CLAUDE.md files that govern the changed code: ~/.claude/CLAUDE.md, the repo-root CLAUDE.md, and any CLAUDE.md or CLAUDE.local.md in a directory that is an ancestor of a changed file (a directory\'s CLAUDE.md applies only at or below it). Read each one that exists, then flag clear violations only when you can quote the exact rule and the exact line that breaks it — no style preferences, no "spirit of the doc" inferences. Name the CLAUDE.md path and quote the rule in the description. Return nothing if no CLAUDE.md applies.',
   },
 ]
+
+const SWEEP = {
+  key: 'sweep',
+  label: 'gaps the first pass missed',
+  kind: 'bug',
+}
 
 const FINDINGS_SCHEMA = {
   type: 'object',
@@ -115,46 +167,139 @@ const VERDICT_SCHEMA = {
   },
 }
 
-function findPrompt(dim) {
-  return `Review the diff between the current branch and origin/${baseBranch} for exactly ONE dimension: ${dim.label}.
+const fileList = files.map(f => `- ${f}`).join('\n')
 
-Files changed:
-${files.map(f => `- ${f}`).join('\n')}
+function contextBlock() {
+  return `Files changed:
+${fileList}
 
 What changed: ${changeNote || 'no change note provided — review the files as given'}
-${planPath ? `\nThe implementation plan is at (read it for intended behavior): ${planPath}` : ''}
+${planPath ? `\nThe implementation plan is at (read it for intended behavior): ${planPath}` : ''}`
+}
+
+function descriptionRule(dim) {
+  return dim.kind === 'bug'
+    ? '`description` must state the concrete failure: the input, state, or timing that triggers it and the wrong output or crash that results.'
+    : '`description` must state the concrete cost: what is duplicated, wasted, left untested, harder to maintain, or which rule is broken.'
+}
+
+const SHARED_RULES = `- Read the actual diff (\`git diff origin/${baseBranch}\` or per-file diffs) before reporting anything — do not guess from filenames.
+- Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
+- \`line\` is the 1-based line number in the file as it exists now on this branch.
+- \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.`
+
+function findPrompt(dim) {
+  return `Review the diff between the current branch and origin/${baseBranch} for exactly ONE angle: ${dim.label}.
+
+${contextBlock()}
 
 Focus: ${dim.prompt}
 
 Rules:
-- Look ONLY at this dimension. Do not report findings that belong to a different dimension (e.g. do not flag style nitpicks here if your dimension is security).
-- Read the actual diff (\`git diff origin/${baseBranch}\` or per-file diffs) before reporting anything — do not guess from filenames.
-- Report only findings you are confident about; prefer silence over a shaky flag. These findings feed an auto-approved fix plan with no human review of the findings list itself, so a false positive becomes a wasted fix cycle.
-- \`line\` is the 1-based line number in the file as it exists now on this branch.
-- \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.
+- Look ONLY at this angle. Do not report findings that belong to a different angle.
+- ${descriptionRule(dim)}
+${SHARED_RULES}
 
-Return {"findings": []} if you find nothing for this dimension — an empty array is a valid, expected result, not a failure.`
+Return {"findings": []} if you find nothing for this angle — an empty array is a valid, expected result, not a failure.`
+}
+
+function sweepPrompt(confirmed) {
+  const known = confirmed.length
+    ? confirmed.map(f => `- ${f.file}:${f.line} [${f.dimension}] ${f.description}`).join('\n')
+    : '- (none)'
+
+  return `You are a fresh reviewer sweeping for gaps in a code review of the diff between the current branch and origin/${baseBranch}.
+
+${contextBlock()}
+
+Already confirmed by the first pass:
+${known}
+
+Re-read the diff and the enclosing functions looking ONLY for defects not already listed. Do not re-derive or re-confirm anything above — your job is gaps. Focus on what a first pass tends to miss: moved or extracted code that dropped a guard or anchor; second-tier footguns (a default evaluated once, \`hash()\` non-determinism, a lock scope that shrank, predicate methods with side effects); setup/teardown asymmetry in tests; config defaults flipped.
+
+Rules:
+- Report at most 8 findings, each a defect not already on the list.
+- ${descriptionRule(SWEEP)}
+${SHARED_RULES}
+
+Return {"findings": []} if you find no gaps.`
 }
 
 function verifyPrompt(f, dim) {
   return `Try to REFUTE this code-review finding. Default to refuted: true if you are not certain it is real.
 
-Dimension: ${dim.label}
+Angle: ${dim.label}
 File: ${f.file}
 Line: ${f.line}
 Claim: ${f.description}
 Suggested fix: ${f.suggestedFix}
 
-Read the actual file content at that location before judging. Refute (refuted: true) if: the code does not actually do what the claim says, the "bug" is intentional/already handled elsewhere, the line number does not correspond to the described code, or the fix would not actually change behavior. Confirm (refuted: false) only if you independently verified the problem exists as described.`
+Read the actual file content at that location, and the diff, before judging.
+
+Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; or the fix would not change behavior.
+
+Do not refute merely because the trigger depends on runtime state when that state is realistic — concurrency races, nil/undefined on a rare but reachable path, falsy-zero treated as missing, an off-by-one on a boundary the code does not exclude, partial failures. Confirm (refuted: false) only if you independently verified the problem exists as described.`
+}
+
+// Verifies every finding concurrently, one adversarial agent each, with no cap.
+async function verifyAll(findings, dim) {
+  if (findings.length === 0) return []
+
+  const verdicts = await parallel(
+    findings.map(f => () =>
+      agent(verifyPrompt(f, dim), {
+        label: `verify:${dim.key}:${f.file}:${f.line}`,
+        phase: 'Verify',
+        model: MODEL,
+        effort: EFFORT,
+        schema: VERDICT_SCHEMA,
+      }),
+    ),
+  )
+
+  const confirmed = []
+
+  // Index-paired with `findings`: parallel() resolves a thrown thunk to `null` in place.
+  for (let i = 0; i < verdicts.length; i++) {
+    const verdict = verdicts[i]
+    const f = findings[i]
+
+    // A missing verdict is NOT a refutation — treating it as one would silently delete
+    // a real finding. Log it and drop it from both lists instead of guessing.
+    if (!verdict) {
+      log(`${dim.key}: verifier for ${f.file}:${f.line} returned no result (user skip or terminal API error) — dropped, not auto-confirmed or auto-refuted`)
+
+      continue
+    }
+
+    if (verdict.refuted === false) confirmed.push({ ...f, dimension: dim.key })
+  }
+
+  return confirmed
+}
+
+// agent() returns null only on user-skip or a terminal API error the harness already
+// retried — not on "found nothing." Treat null as unverified, never as a clean pass.
+function readFindings(result, dim) {
+  if (result === null || result === undefined) {
+    log(`${dim.key}: UNVERIFIED — agent returned no result (user skip or terminal API error)`)
+
+    return null
+  }
+
+  if (!Array.isArray(result.findings)) {
+    log(`${dim.key}: UNVERIFIED — result had no findings array`)
+
+    return null
+  }
+
+  return result.findings
 }
 
 phase('Find')
 
-// Claimed synchronously (no await between check and increment) by the verify stage
-// below, across whichever dimensions happen to be running concurrently in the
-// pipeline — JS is single-threaded, so this is race-free without a lock.
-let verifiersClaimed = 0
-
+// Pipeline, not parallel+barrier: each angle's findings verify while other angles are
+// still finding — no cross-angle dependency justifies waiting for all finders.
 const reviewed = await pipeline(
   DIMENSIONS,
   dim =>
@@ -165,104 +310,26 @@ const reviewed = await pipeline(
       effort: EFFORT,
       schema: FINDINGS_SCHEMA,
     }),
-  (result, dim) => {
-    // agent() returns null only on user-skip or a terminal API error the harness
-    // already retried — not on "found nothing." Treat null as unverified for this
-    // dimension rather than silently treating it as a clean pass.
-    if (result === null || result === undefined) {
-      log(`${dim.key}: UNVERIFIED — agent returned no result (user skip or terminal API error)`)
-      return { dim, findings: [], unverified: true }
-    }
+  async (result, dim) => {
+    const found = readFindings(result, dim)
 
-    if (!Array.isArray(result.findings)) {
-      log(`${dim.key}: UNVERIFIED — result had no findings array`)
-      return { dim, findings: [], unverified: true }
-    }
+    if (found === null) return { confirmed: [], unverified: true }
 
-    return { dim, findings: result.findings, unverified: false }
-  },
-  ({ dim, findings, unverified }) => {
-    if (unverified || findings.length === 0) return { dim, confirmed: [], unverified }
-
-    // Claim from the shared cross-dimension budget synchronously (no await yet), so
-    // two dimensions racing through this stage at once cannot both see room and
-    // together blow past MAX_VERIFIERS.
-    const toVerify = []
-    const dropped = []
-
-    for (const f of findings) {
-      if (verifiersClaimed < MAX_VERIFIERS) {
-        verifiersClaimed++
-        toVerify.push(f)
-      } else {
-        dropped.push(f)
-      }
-    }
-
-    if (dropped.length > 0) {
-      log(
-        `${dim.key}: verifier budget exhausted (cap ${MAX_VERIFIERS} shared across all dimensions) — ` +
-          `${dropped.length} finding(s) NOT verified and dropped: ${dropped.map(f => `${f.file}:${f.line}`).join(', ')}`,
-      )
-    }
-
-    if (toVerify.length === 0) return { dim, confirmed: [], unverified: false }
-
-    // Every fresh finding verified concurrently by an independent adversarial pass —
-    // this stage runs for dimension A while dimension B may still be in the Find
-    // stage above (pipeline, not parallel+barrier): no cross-dimension dependency
-    // justifies waiting for all 5 finders before verification starts.
-    return parallel(
-      toVerify.map(f => () =>
-        agent(verifyPrompt(f, dim), {
-          label: `verify:${dim.key}:${f.file}:${f.line}`,
-          phase: 'Verify',
-          model: MODEL,
-          effort: EFFORT,
-          schema: VERDICT_SCHEMA,
-        }).then(v => ({ f, verdict: v })),
-      ),
-    ).then(verdicts => {
-      const confirmed = []
-
-      // Index-paired with toVerify rather than reading verdicts[i].f: parallel()
-      // resolves a thrown thunk to `null` in place, so `entry` can be null here even
-      // though toVerify[i] is always the real finding.
-      for (let i = 0; i < verdicts.length; i++) {
-        const entry = verdicts[i]
-        const f = toVerify[i]
-
-        // A verifier that returned null (user-skip or terminal API error) or threw
-        // is NOT the same as "refuted" — treating it as refuted would silently
-        // delete a real finding with no trace. Log it and drop it from BOTH lists
-        // instead of auto-confirming or auto-refuting a claim nobody actually judged.
-        if (!entry || !entry.verdict) {
-          log(`${dim.key}: verifier for ${f.file}:${f.line} returned no result (user skip or terminal API error) — dropped, not auto-confirmed or auto-refuted`)
-
-          continue
-        }
-
-        if (entry.verdict.refuted === false) confirmed.push({ ...f, dimension: dim.key })
-      }
-
-      return { dim, confirmed, unverified: false }
-    })
+    return { confirmed: await verifyAll(found, dim), unverified: false }
   },
 )
 
 const findings = []
 const dimensionsUnverified = []
 
-// Index-paired with DIMENSIONS rather than iterating `reviewed` directly: a stage
-// that throws drops that pipeline item to `null` (per the Workflow contract), and
-// without the index we'd lose which dimension vanished — it would disappear from
-// both `findings` and `dimensionsUnverified` with no trace at all.
+// Index-paired with DIMENSIONS: a stage that throws drops that pipeline item to `null`,
+// and without the index we'd lose which angle vanished.
 for (let i = 0; i < DIMENSIONS.length; i++) {
   const dim = DIMENSIONS[i]
   const r = reviewed[i]
 
   if (!r) {
-    log(`${dim.key}: UNVERIFIED — pipeline stage threw for this dimension`)
+    log(`${dim.key}: UNVERIFIED — pipeline stage threw for this angle`)
     dimensionsUnverified.push(dim.key)
 
     continue
@@ -275,6 +342,30 @@ for (let i = 0; i < DIMENSIONS.length; i++) {
   }
 
   for (const f of r.confirmed) findings.push(f)
+}
+
+phase('Sweep')
+
+// Runs after every angle so it can see the full confirmed list and hunt only for gaps.
+try {
+  const sweepResult = await agent(sweepPrompt(findings), {
+    label: 'find:sweep',
+    phase: 'Sweep',
+    model: MODEL,
+    effort: EFFORT,
+    schema: FINDINGS_SCHEMA,
+  })
+
+  const found = readFindings(sweepResult, SWEEP)
+
+  if (found === null) {
+    dimensionsUnverified.push(SWEEP.key)
+  } else {
+    for (const f of await verifyAll(found, SWEEP)) findings.push(f)
+  }
+} catch (e) {
+  log(`sweep: UNVERIFIED — ${(e && e.message) || e}`)
+  dimensionsUnverified.push(SWEEP.key)
 }
 
 findings.sort((a, b) => {

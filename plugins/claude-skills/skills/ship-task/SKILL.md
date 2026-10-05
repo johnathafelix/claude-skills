@@ -1,6 +1,6 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs an auto-approved fix plan, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
+description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated xhigh/opus code review runs, deep-reasoner designs a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
 argument-hint: "[what you want shipped]"
 ---
 
@@ -9,8 +9,8 @@ argument-hint: "[what you want shipped]"
 Take a task from description to an open, described PR through the existing agent team:
 `planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
 (opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
-code review runs at xhigh effort on opus; `deep-reasoner` designs an auto-approved fix
-plan; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
+code review runs at xhigh effort on opus; `deep-reasoner` designs a fix plan
+and YOU gate it; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
 `/draft-pr` → `/update-pr-description` ship it; `/compact-comments` runs last.
 
 **This skill spans many turns** — your own plan-approval dialog in Phase 1, and a
@@ -280,7 +280,7 @@ If `findingCount` is 0 **and** `TEST_FINDINGS` from 1g is empty, log that the re
 clean and skip to Phase 5. If either list is non-empty, continue to Phase 3 with whichever
 lists have entries — a clean code review does not skip the test fixes, and vice versa.
 
-## Phase 3 — Fix plan (`deep-reasoner`, opus, auto-approved)
+## Phase 3 — Fix plan (`deep-reasoner`, opus, user-approved)
 
 Spawn `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`.
 Give it: the confirmed findings from Phase 2 (file, line, description, suggestedFix,
@@ -306,9 +306,18 @@ actual value or a typed matcher, a `mock-expectations` finding by asserting both
 a `coverage` finding by tests that exercise the named ranges with real assertions.
 
 `deep-reasoner` is analysis-only and will not write files itself — write its returned
-text to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself. There is no approval gate
-here by design: proceeding to Phase 4 immediately is the auto-approval the user asked
-for.
+text to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself.
+
+**Gate it.** Print the fixes plan in full, followed by the findings it covers (file:line,
+dimension, description), so the user can check it does not diverge from what the review
+found. Then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes)* / *Skip
+fixes*. This is `AskUserQuestion`, not `ExitPlanMode`, for the same reason as 1f.
+
+- **Approve** — continue to Phase 4.
+- **Revise** — re-spawn `deep-reasoner` with the same inputs plus the user's notes,
+  overwrite the same fixes file, and gate again.
+- **Skip fixes** — apply nothing; go straight to Phase 5 and record every finding and
+  `TEST_FINDINGS` entry as *skipped by the user*.
 
 ## Phase 4 — Apply fixes (`fast-worker`, sonnet)
 
@@ -347,6 +356,9 @@ analysis only. Give it: both plan file paths (Phase 1's implementation plan and 
 - every `test-check` finding: fixed / not fixed — "fixed" means the test now asserts or
   covers what the finding's `action` asked for, not merely that a test was touched
 - every success-checklist item from Phase 1: pass / fail, with evidence
+
+Findings the user skipped at the Phase 3 gate are not gaps: leave them out of the
+verdict list, the remediation pass, and the guard below.
 
 If it reports any gap, run exactly **one** remediation pass
 (`claude-skills:fast-worker`, `model: "sonnet"`, `run_in_background: false`) targeted at
@@ -387,6 +399,7 @@ Report: outcome, both plan file paths, files changed (implementation + fixes), 1
 `ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files"), 1g's
 `test-check` findings and how each was resolved (plus its refuted/unchallenged/UNVERIFIED
 lists), the simplifier's summary, the code-review findings and how each was resolved (or
-"clean" / list any `dimensionsUnverified`), the final check's per-item verdict, Phase 7's
+"clean" / list any `dimensionsUnverified`), the Phase 3 gate's outcome (approved /
+revised / skipped — list skipped findings), the final check's per-item verdict, Phase 7's
 compact-comments report (with its follow-up commit SHA, if any), and the PR URL. If
 Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.

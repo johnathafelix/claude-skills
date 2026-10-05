@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `deep-reasoner` designs an auto-approved fix plan, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
+description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated xhigh/opus code review runs on the new code, `deep-reasoner` designs a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -14,8 +14,8 @@ mistake into the codebase, so nothing gets planned until it survives verificatio
 The pipeline: fetch the unresolved threads → a fable verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
-(opus) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan →
-`fast-worker` applies → `/compact-comments` → `/git-commit` → push →
+(opus) implements → xhigh/opus code review on the new code → `deep-reasoner` fix plan
+and YOU gate it → `fast-worker` applies → `/compact-comments` → `/git-commit` → push →
 `/update-pr-description` → one short reply per thread.
 
 Everything happens on the **current branch and its existing PR**. This skill never
@@ -376,7 +376,7 @@ review does not skip the test fixes, and vice versa.
 
 ## Phase 7 — Fix the review findings
 
-**7a — Fix plan (`deep-reasoner`, opus, auto-approved).** Spawn
+**7a — Fix plan (`deep-reasoner`, opus, user-approved).** Spawn
 `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`. Give it
 the confirmed findings (file, line, description, suggestedFix, dimension), `TEST_FINDINGS`
 from 5b (file, line–endLine, rule, description, rationale, action — the `action` is the fix
@@ -398,8 +398,17 @@ existing harness if the finding names one), an `assertion-strictness` finding by
 value or a typed matcher, a `mock-expectations` finding by asserting both halves, a
 `coverage` finding by tests that exercise the named ranges with real assertions.
 `deep-reasoner` is analysis-only, so write its returned text to
-`.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes-followup.md` yourself. There is no
-approval gate here by design.
+`.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes-followup.md` yourself.
+
+Gate it: print the plan in full, followed by the findings it covers (file:line, dimension,
+description), then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes)* /
+*Skip fixes*. This is `AskUserQuestion`, not `ExitPlanMode`, because approval in 4b already left plan mode.
+
+- **Approve** — continue to 7b.
+- **Revise** — re-spawn `deep-reasoner` with the same inputs plus the user's notes,
+  overwrite the same file, and gate again.
+- **Skip fixes** — apply nothing; go straight to 7c and record every finding and
+  `TEST_FINDINGS` entry as *skipped by the user*.
 
 **7b — Apply (`fast-worker`, sonnet).** **One wave = one message containing that wave's
 `Agent` calls, every one with `run_in_background: false`.** That is the wave barrier:
@@ -430,6 +439,9 @@ confirmed findings, `TEST_FINDINGS`, the `valid` verdicts from Phase 2, and
 - every `test-check` finding: fixed / not fixed — "fixed" means the test now asserts or
   covers what the finding's `action` asked for, not merely that a test was touched
 - every success-checklist item from Phase 4: pass / fail, with evidence
+
+Findings the user skipped at the 7a gate are not gaps: leave them out of the verdict list,
+the remediation pass, and the guard below.
 
 On any gap, run exactly **one** remediation pass (`claude-skills:fast-worker`,
 `model: "sonnet"`, `run_in_background: false`) targeted at the specific gaps, then re-run
@@ -511,7 +523,8 @@ signal the already-answered guard in Phase 1 leaves them.
 
 A table, one row per thread: reviewer comment (truncated), verdict, what was done, reply
 URL. Then: both plan file paths, the files changed, the code-review findings and how each
-was resolved (or "clean"), the short SHA, and `PR_URL`.
+was resolved (or "clean"), the 7a gate's outcome (approved / revised / skipped — list
+skipped findings), the short SHA, and `PR_URL`.
 
 State plainly, without burying it: any `unverified` or `unchallenged` thread from Phase 2,
 any verdict still `needs-user-input` after Phase 2b, Phase 5b's `ts-check`/`golang-check`
