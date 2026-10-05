@@ -58,6 +58,10 @@ if (!EFFORT_LEVELS.includes(EFFORT)) {
 
 // Set only when reviewing a checkout other than the session's working directory (a PR worktree).
 const repoDir = typeof parsedArgs.repoDir === 'string' ? parsedArgs.repoDir.trim() : ''
+
+// Set by review-pr to verify findings from other checkers (golang-check, ts-check): skips
+// the finders and the sweep, and runs only the adversarial verifier on these.
+const verifyOnly = Array.isArray(parsedArgs.verifyOnly) ? parsedArgs.verifyOnly : null
 const diffCommand = typeof parsedArgs.diffCommand === 'string' && parsedArgs.diffCommand.trim() ? parsedArgs.diffCommand.trim() : `git diff origin/${baseBranch}`
 
 // Inline, not a guidelines/ directory — this isn't an extensible rule set; YAGNI.
@@ -139,7 +143,9 @@ const DIMENSIONS = [
     key: 'conventions',
     label: 'CLAUDE.md conventions',
     kind: 'cost',
-    prompt: 'Find the CLAUDE.md files that govern the changed code: ~/.claude/CLAUDE.md, the repo-root CLAUDE.md, and any CLAUDE.md or CLAUDE.local.md in a directory that is an ancestor of a changed file (a directory\'s CLAUDE.md applies only at or below it). Read each one that exists, then flag clear violations only when you can quote the exact rule and the exact line that breaks it — no style preferences, no "spirit of the doc" inferences. Name the CLAUDE.md path and quote the rule in the description. Return nothing if no CLAUDE.md applies.',
+    // In PR mode (repoDir set) the code is someone else's, so the reviewer's own
+    // ~/.claude/CLAUDE.md preferences must not be enforced on it.
+    prompt: `Find the CLAUDE.md files that govern the changed code: ${repoDir ? '' : '~/.claude/CLAUDE.md, '}the repo-root CLAUDE.md, and any CLAUDE.md or CLAUDE.local.md in a directory that is an ancestor of a changed file (a directory\'s CLAUDE.md applies only at or below it). Read each one that exists, then flag clear violations only when you can quote the exact rule and the exact line that breaks it — no style preferences, no "spirit of the doc" inferences. Name the CLAUDE.md path and quote the rule in the description. Return nothing if no CLAUDE.md applies.${repoDir ? " Ignore every file under ~/.claude — it holds the reviewer's personal preferences, not this repo's rules." : ''}`,
   },
 ]
 
@@ -326,76 +332,115 @@ function readFindings(result, dim) {
   return result.findings
 }
 
-phase('Find')
-
-// Pipeline, not parallel+barrier: each angle's findings verify while other angles are
-// still finding — no cross-angle dependency justifies waiting for all finders.
-const reviewed = await pipeline(
-  DIMENSIONS,
-  dim =>
-    agent(findPrompt(dim), {
-      label: `find:${dim.key}`,
-      phase: 'Find',
-      model: MODEL,
-      effort: EFFORT,
-      schema: FINDINGS_SCHEMA,
-    }),
-  async (result, dim) => {
-    const found = readFindings(result, dim)
-
-    if (found === null) return { confirmed: [], unverified: true }
-
-    return { confirmed: await verifyAll(found, dim), unverified: false }
-  },
-)
-
 const findings = []
 const dimensionsUnverified = []
 
-// Index-paired with DIMENSIONS: a stage that throws drops that pipeline item to `null`,
-// and without the index we'd lose which angle vanished.
-for (let i = 0; i < DIMENSIONS.length; i++) {
-  const dim = DIMENSIONS[i]
-  const r = reviewed[i]
+async function review() {
+  phase('Find')
 
-  if (!r) {
-    log(`${dim.key}: UNVERIFIED — pipeline stage threw for this angle`)
-    dimensionsUnverified.push(dim.key)
+  // Pipeline, not parallel+barrier: each angle's findings verify while other angles are
+  // still finding — no cross-angle dependency justifies waiting for all finders.
+  const reviewed = await pipeline(
+    DIMENSIONS,
+    dim =>
+      agent(findPrompt(dim), {
+        label: `find:${dim.key}`,
+        phase: 'Find',
+        model: MODEL,
+        effort: EFFORT,
+        schema: FINDINGS_SCHEMA,
+      }),
+    async (result, dim) => {
+      const found = readFindings(result, dim)
 
-    continue
+      if (found === null) return { confirmed: [], unverified: true }
+
+      return { confirmed: await verifyAll(found, dim), unverified: false }
+    },
+  )
+
+  // Index-paired with DIMENSIONS: a stage that throws drops that pipeline item to `null`,
+  // and without the index we'd lose which angle vanished.
+  for (let i = 0; i < DIMENSIONS.length; i++) {
+    const dim = DIMENSIONS[i]
+    const r = reviewed[i]
+
+    if (!r) {
+      log(`${dim.key}: UNVERIFIED — pipeline stage threw for this angle`)
+      dimensionsUnverified.push(dim.key)
+
+      continue
+    }
+
+    if (r.unverified) {
+      dimensionsUnverified.push(dim.key)
+
+      continue
+    }
+
+    for (const f of r.confirmed) findings.push(f)
   }
 
-  if (r.unverified) {
-    dimensionsUnverified.push(dim.key)
+  phase('Sweep')
 
-    continue
+  // Runs after every angle so it can see the full confirmed list and hunt only for gaps.
+  try {
+    const sweepResult = await agent(sweepPrompt(findings), {
+      label: 'find:sweep',
+      phase: 'Sweep',
+      model: MODEL,
+      effort: EFFORT,
+      schema: FINDINGS_SCHEMA,
+    })
+
+    const found = readFindings(sweepResult, SWEEP)
+
+    if (found === null) {
+      dimensionsUnverified.push(SWEEP.key)
+    } else {
+      for (const f of await verifyAll(found, SWEEP)) findings.push(f)
+    }
+  } catch (e) {
+    log(`sweep: UNVERIFIED — ${(e && e.message) || e}`)
+    dimensionsUnverified.push(SWEEP.key)
   }
-
-  for (const f of r.confirmed) findings.push(f)
 }
 
-phase('Sweep')
+// One verifier group per source dimension, so each verifier sees the checker's rule.
+async function verifyGiven() {
+  phase('Verify')
 
-// Runs after every angle so it can see the full confirmed list and hunt only for gaps.
-try {
-  const sweepResult = await agent(sweepPrompt(findings), {
-    label: 'find:sweep',
-    phase: 'Sweep',
-    model: MODEL,
-    effort: EFFORT,
-    schema: FINDINGS_SCHEMA,
-  })
+  const groups = new Map()
 
-  const found = readFindings(sweepResult, SWEEP)
+  for (const f of verifyOnly) {
+    const key = typeof f.dimension === 'string' && f.dimension ? f.dimension : 'external'
 
-  if (found === null) {
-    dimensionsUnverified.push(SWEEP.key)
-  } else {
-    for (const f of await verifyAll(found, SWEEP)) findings.push(f)
+    if (!groups.has(key)) {
+      groups.set(key, { dim: { key, label: f.dimensionLabel || key }, items: [] })
+    }
+
+    groups.get(key).items.push({ ...f, severity: f.severity === 'nit' ? 'nit' : 'issue' })
   }
-} catch (e) {
-  log(`sweep: UNVERIFIED — ${(e && e.message) || e}`)
-  dimensionsUnverified.push(SWEEP.key)
+
+  const results = await parallel([...groups.values()].map(g => () => verifyAll(g.items, g.dim)))
+  const keys = [...groups.keys()]
+
+  for (let i = 0; i < results.length; i++) {
+    if (!results[i]) {
+      log(`${keys[i]}: UNVERIFIED — verification threw for this group`)
+      dimensionsUnverified.push(keys[i])
+
+      continue
+    }
+
+    for (const f of results[i]) findings.push(f)
+  }
+}
+
+if (verifyOnly) {
+  await verifyGiven()
+} else {
+  await review()
 }
 
 // Angles overlap (a stale doc pointer is both a line-scan and a conventions finding), so

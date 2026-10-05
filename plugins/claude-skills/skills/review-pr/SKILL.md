@@ -1,17 +1,19 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (13 opus finder angles, a gap sweep, adversarial verification; effort default high), posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (13 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
 argument-hint: "<PR URL> [low|medium|high|xhigh|max]"
 ---
 
 # Review PR
 
 Take a teammate's PR from URL to a posted review: run the `code-review` workflow on it,
-post the findings as inline comments, and approve it if nothing but nits remain.
+plus `golang-check` / `ts-check` for its language and `test-check`, post the findings as
+inline comments, and approve it if nothing but nits remain.
 
 **This skill posts to GitHub without asking.** Invoking it is the user's approval to
 post a review under their account. It never edits code, pushes, merges, or resolves
-threads.
+threads. It does run the PR's test suite inside a temporary worktree, for `test-check`
+coverage.
 
 **Dispatching is not finishing.** The review runs as a background `Workflow`. Do not end
 the turn on its task ID — wait for the completion notification, then post and report.
@@ -41,17 +43,69 @@ gh api --paginate "repos/$OWNER/$REPO/pulls/$PR_NUMBER/reviews" \
 
 Record `HEAD_SHA = headRefOid` — the review is pinned to it.
 
-## Step 3 — Run the review
+## Step 3 — Run the code review
 
 Read `../code-review/SKILL.md` (resolve it from this file's own location; do not
 hardcode a home directory) and follow its **Steps 2b and 3** in PR mode with this URL and
-`EFFORT`: same-repo check, temporary worktree, staged `workflow.js`, `Workflow` dispatch.
-Its cleanup in 2b step 6 is unconditional — run it once the workflow finishes, before
-posting anything.
+`EFFORT`: same-repo check, temporary worktree `$WT`, staged `workflow.js`, `Workflow`
+dispatch. **Hold its cleanup (2b step 6)** until Steps 3b and 3c are done too — they
+need the worktree. Cleanup is still unconditional: run it before posting, even when
+something failed.
 
 Read `{ findings, findingCount, dimensionsUnverified }` from the completion
 notification. Each finding has `file`, `line`, `severity` (`issue` / `nit`),
 `dimension`, `description`, `suggestedFix`.
+
+## Step 3b — Language checks and test-check
+
+Start these right after dispatching Step 3, so they run alongside it. Split the PR's
+changed files:
+
+- `*.go` → `Skill({ skill: "claude-skills:golang-check", args: "<those files>" })`
+- `*.ts` / `*.tsx` → `Skill({ skill: "claude-skills:ts-check", args: "<those files>" })`
+- every changed file → `Skill({ skill: "claude-skills:test-check", args: "<all of them>" })`
+
+Skip a language check that has no matching files. Pass every file as an **absolute path
+under `$WT`**. Their instructions run in this context, so while following them:
+
+- run every shell command they prescribe inside the worktree (`cd "$WT" && …`);
+- `BASE_BRANCH` is the PR base, and any diff they compute uses `origin/$BASE...HEAD` (for
+  `test-check`'s `changedRanges` too);
+- `test-check` coverage: run the suite inside `$WT` with the report written to the
+  scratchpad. If `$WT` has no `node_modules`, **do not install dependencies** — coverage
+  is UNVERIFIED with that reason;
+- skip their present-to-user steps and post nothing from them — keep the raw results for
+  Step 3c.
+
+Strip the `$WT/` prefix from every file path they return.
+
+## Step 3c — Normalize and verify
+
+Bring every source into the code-review finding shape
+`{ file, line, severity, description, suggestedFix, dimension }`:
+
+| Source | `severity` | `description` | `suggestedFix` | `dimension` |
+|---|---|---|---|---|
+| `test-check` `findings` | `error` → `issue`, else `nit` | description + rationale | action | `test-check/<rule>` |
+| `golang-check` | `error` → `issue`, else `nit` | description | suggestedFix | `golang-check/<rule>` |
+| `ts-check` | `nit` | description | suggestedFix | `ts-check/<rule>` |
+
+`test-check` already verified its findings. Its `unchallenged` items are not posted —
+report them to the user. Its `refuted` items are dropped.
+
+`golang-check` and `ts-check` findings are not verified yet. Dispatch the same staged
+`code-review` workflow in verify-only mode, with each finding also carrying
+`dimensionLabel` (e.g. `"Go idiom: errors"`):
+
+```
+Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js",
+  args: { verifyOnly: [<normalized golang/ts findings>], files, baseBranch: BASE, effort: EFFORT, repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD" } })
+```
+
+Keep only the findings it returns. Then run the worktree cleanup, and combine all three
+sets — code review, verified language checks, test-check — merging any that share
+`file:line`: one finding, every dimension listed, the higher severity, each source's text
+kept.
 
 ## Step 4 — Place each finding
 
@@ -82,9 +136,16 @@ voice, at most 6 lines each:
 
 ## Step 6 — Decide the review state
 
+**Something did not run** when any of these hold: the code review's
+`dimensionsUnverified` is non-empty; a `golang-check` or `ts-check` guideline is
+UNVERIFIED; the verify-only run's `dimensionsUnverified` is non-empty; or a `test-check`
+`unverified` guideline is anything other than `coverage`. Coverage not running (e.g. a TS
+worktree without `node_modules`) does **not** count — report it to the user, but it does
+not block approval.
+
 | Situation | Event | Posts |
 |---|---|---|
-| `dimensionsUnverified` non-empty | `COMMENT` | the comments; never approve when part of the review did not run |
+| something did not run | `COMMENT` | the comments; never approve when part of the review did not run |
 | any `issue` | `COMMENT` | the comments |
 | only nits, `CAN_APPROVE` | `APPROVE` | the nit comments |
 | zero findings, `CAN_APPROVE` | `APPROVE` | no comments, empty body |
@@ -121,5 +182,9 @@ event.
 - The review URL.
 - One line per comment: link, severity, gist.
 - Any **Outside this PR's diff** findings.
-- Any `dimensionsUnverified`, stated plainly as not a clean pass and the reason the PR
+- Which checks ran (code review, `golang-check` / `ts-check`, `test-check`) and whether
+  coverage was measured — with the reason if not.
+- Anything that did not run, stated plainly as not a clean pass and the reason the PR
   was not approved.
+- `test-check` `unchallenged` items (not posted), and how many language-check findings
+  the verifier refuted.
