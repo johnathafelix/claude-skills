@@ -1,6 +1,6 @@
 ---
 name: review-requests
-description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "👀 reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies "✅ <outcome>". Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 5 minutes (configurable). Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
+description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies with the outcome. Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 5 minutes (configurable). Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
 argument-hint: ""
 ---
 
@@ -115,13 +115,13 @@ Each started review has, under `STATE`, `<ts>.url` (the PR URL) and, while it ru
 
 | `REVIEW_RESULT` | Thread reply |
 |---|---|
-| `commented` | ✅ i left some comments |
-| `approved_nits` | ✅ approved, left some nit comments |
-| `approved` | ✅ approved |
-| `no_findings` | ✅ done |
-| `merged` | ✅ already merged |
-| `closed` | ✅ already closed |
-| `already_reviewed` | ✅ already reviewed this commit |
+| `commented` | left some comments |
+| `approved_nits` | left some nit comments, but approved! 🚀 |
+| `approved` | approved! 🚀 |
+| `no_findings` | done! 🚀 |
+| `merged` | already merged |
+| `closed` | pr is closed |
+| `already_reviewed` | already reviewed this commit ✅ |
 | `head_moved` | — |
 | `error` | — |
 
@@ -130,7 +130,7 @@ Each started review has, under `STATE`, `<ts>.url` (the PR URL) and, while it ru
      so Step 4 starts it again without a second "reviewing..." reply.
    - `error` → keep `<ts>.out` and `<ts>.err`, rename `<ts>.url` to `<ts>.failed`, and
      tell the user the PR URL, the last lines of `.result` and `.err`, and that deleting
-     `STATE/<ts>.*` retries it. The thread still says "👀 reviewing...", so the user
+     `STATE/<ts>.*` retries it. The thread still says "reviewing...", so the user
      follows up by hand.
    - Any other outcome → delete the other `STATE/<ts>.*` files and write
      `STATE/<ts>.done`, so the request is never picked up again.
@@ -167,7 +167,7 @@ For each request taken:
    - The clone failed, or `CLONE` holds a different repo → write `STATE/<ts>.skipped`,
      tell the user why, and leave the Slack message untouched. Never delete or overwrite
      an existing `CLONE`.
-3. **Acknowledge** — reply `👀 reviewing...` in its thread. Skip this when
+3. **Acknowledge** — reply `reviewing...` in its thread. Skip this when
    `STATE/<ts>.retry` exists (it was already acknowledged); delete that file instead.
 4. **Start** — write the URL to `STATE/<ts>.url`, then run with `Bash`
    `run_in_background: true`:
