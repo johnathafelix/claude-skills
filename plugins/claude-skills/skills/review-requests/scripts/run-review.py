@@ -6,6 +6,9 @@ review as a background Workflow and finishes in a later turn, when the completio
 notification arrives. Holding stdin open in stream-json mode keeps the session alive
 for those turns, so this waits until a turn ends with the REVIEW_RESULT line.
 
+The session is pinned to opus, so the polling session can run on a cheaper model
+without weakening the review.
+
 Run from the PR repo's clone. Prints {"result": "<last turn's text>"} on stdout.
 
     run-review.py <PR URL>
@@ -26,6 +29,7 @@ def main():
     session = subprocess.Popen(
         [
             "claude", "-p",
+            "--model", "opus",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
