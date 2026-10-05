@@ -24,7 +24,7 @@ Check the tests behind a branch's changes against the project's test-quality gui
 4. Collect the changed line ranges for the source files, so the coverage check knows which lines are "new or modified":
 
    ```bash
-   git diff -U0 origin/$BASE_BRANCH -- <sourceFiles> | awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,/[+,]/); n=(a[3]==""?1:a[3]); if(n>0) printf "%s:%d-%d\n", f, a[2], a[2]+n-1}'
+   git diff -U0 origin/$BASE_BRANCH -- <sourceFiles> | awk '/^\+\+\+ b\//{f=substr($(0),7)} /^@@/{split($(3),a,/[+,]/); n=(a[3]==""?1:a[3]); if(n>0) printf "%s:%d-%d\n", f, a[2], a[2]+n-1}'
    ```
 
    Keep the output as one newline-separated string, `path:start-end` per hunk — that is `changedRanges`.
@@ -57,7 +57,7 @@ In every command below, `$G` stands for the **absolute** `guidelines/` directory
 2. **First line + last non-empty line**, via one tab-delimited command with no header lines to strip:
 
    ```
-   awk 'FNR==1{a[FILENAME]=$0} NF{b[FILENAME]=$0} END{for (f in a) printf "%s\t%s\t%s\n", f, a[f], b[f]}' '$G/'*.md
+   awk 'FNR==1{a[FILENAME]=$(0)} NF{b[FILENAME]=$(0)} END{for (f in a) printf "%s\t%s\t%s\n", f, a[f], b[f]}' '$G/'*.md
    ```
 
    Each row is `path <TAB> firstLine <TAB> lastNonEmptyLine` — split on tabs, since guideline bodies contain none. These two strings are **body anchors** for the proof-of-read: they make the checker prove it saw the file's contents, not merely that a command ran. Pass them through **verbatim** as `title` and `lastLine` — do not trim, re-title, or tidy them, and never substitute the filename. The script normalizes whitespace and letter case when it compares. If you omit either, the script logs a `proof-of-read leg DISABLED` warning and falls back to the line count alone, which is the weaker gate this replaced.
