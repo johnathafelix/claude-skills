@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (13 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
 argument-hint: "<PR URL> [low|medium|high|xhigh|max]"
 ---
 

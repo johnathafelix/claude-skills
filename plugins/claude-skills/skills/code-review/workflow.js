@@ -101,7 +101,13 @@ const DIMENSIONS = [
     key: 'error-handling',
     label: 'error handling & silent failures',
     kind: 'bug',
-    prompt: 'Look for swallowed errors, empty catch blocks, inappropriate fallback values that mask real failures, and error paths that log but do not actually handle the problem.',
+    prompt: 'Look for swallowed errors, empty catch blocks, inappropriate fallback values that mask real failures, and error paths that log but do not actually handle the problem. For each catch / `if err != nil` / recover the diff adds or changes, name the concrete errors it could hide. Also flag: `?.` / `??` / `_ =` / an ignored `err` that silently skips work which can fail; retries that exhaust without surfacing the failure; fallback chains with no stated reason; a fallback to a mock, stub, or fake outside test code; a catch that skips cleanup or resource release; an error handled locally that should propagate to the caller. A log line missing the context to act on it (which operation, which IDs) is a nit.',
+  },
+  {
+    key: 'type-invariants',
+    label: 'type invariants',
+    kind: 'bug',
+    prompt: 'For each type the diff adds or changes, name its invariants, then flag any constructor, exported/public field, or mutator that lets an invalid instance exist — internals exposed for mutation, no validation at construction, a mutator that skips a check another one enforces, an invariant that relies on every caller doing the right thing. State the concrete invalid state and how it is reached. Return nothing if the diff adds or changes no type.',
   },
   {
     key: 'security',
@@ -113,7 +119,8 @@ const DIMENSIONS = [
     key: 'tests',
     label: 'tests & coverage',
     kind: 'cost',
-    prompt: 'Look for missing tests on new behavior, tests that do not actually assert the behavior they claim to, and edge cases the plan calls for that have no corresponding test.',
+    prompt: 'Judge behavioral coverage, not line coverage. Look for missing tests on new behavior, tests that do not actually assert the behavior they claim to, edge cases the plan calls for that have no corresponding test, untested error paths, missing negative cases for new validation, and untested concurrent or async behavior. A test so coupled to implementation details that a harmless refactor would break it is a nit. Severity: a missing test that could hide data loss, a security hole, or a failure is an issue; an edge case is a nit; below that, do not report.',
+    refute: 'Refute a finding that asks for tests on trivial getters/setters or pass-through code, or whose scenario existing tests already cover (cite the test).',
   },
   {
     key: 'reuse',
@@ -125,7 +132,8 @@ const DIMENSIONS = [
     key: 'simplification',
     label: 'simplification',
     kind: 'cost',
-    prompt: 'Flag unnecessary complexity the diff adds: redundant or derivable state, copy-paste with slight variation, deep nesting, dead code left behind. Name the simpler form that does the same job.',
+    prompt: 'Flag unnecessary complexity the diff adds: redundant or derivable state, copy-paste with slight variation, deep nesting, nested ternaries (prefer if/else or switch), dead code left behind, and code compacted so far it hurts clarity. Name the simpler form that does the same job.',
+    refute: 'Refute a finding whose simpler form would remove a useful abstraction or merge concerns that are separate on purpose.',
   },
   {
     key: 'efficiency',
@@ -138,6 +146,12 @@ const DIMENSIONS = [
     label: 'altitude (root cause vs symptom)',
     kind: 'cost',
     prompt: 'Check that each change fixes the root cause at the right depth rather than patching a symptom. Special cases layered on shared infrastructure are a sign the fix is not deep enough — name the simpler, more general change to the underlying mechanism.',
+  },
+  {
+    key: 'comments',
+    label: 'comment and doc accuracy',
+    kind: 'cost',
+    prompt: 'For every comment or docstring the diff adds, and every existing one on or above a function the diff changes, check each claim against the code as it is now: parameters, return values, errors, edge cases, referenced symbols, complexity. Flag contradictions, references to code that was renamed or removed, and TODO/FIXME notes the diff already resolved. A comment that would mislead a reader is an issue; one that merely restates the code is at most a nit. Do not ask for more comments.',
   },
   {
     key: 'conventions',
@@ -268,7 +282,7 @@ Suggested fix: ${f.suggestedFix}
 
 ${locationNote}Read the actual file content at that location, and the diff (\`${diffCommand}\`), before judging.
 
-Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; for an issue, the fix would not change behavior; for a nit, the stated cost (duplication, naming, wording) is not actually there.
+Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; for an issue, the fix would not change behavior; for a nit, the stated cost (duplication, naming, wording) is not actually there.${dim.refute ? ` ${dim.refute}` : ''}
 
 Do not refute merely because the trigger depends on runtime state when that state is realistic — concurrency races, nil/undefined on a rare but reachable path, falsy-zero treated as missing, an off-by-one on a boundary the code does not exclude, partial failures. Confirm (refuted: false) only if you independently verified the problem exists as described.
 

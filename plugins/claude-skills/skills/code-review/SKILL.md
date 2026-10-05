@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review code changes and report findings — never plans or applies fixes. Runs 13 focused finder angles (line scan, removed behavior, cross-file callers, language pitfalls, wrappers, error handling, security, tests, reuse, simplification, efficiency, altitude, CLAUDE.md conventions) plus a gap sweep, every agent on opus, then verifies each finding with an adversarial opus agent. Reviews the current branch's changes against its PR base by default, or a teammate's GitHub PR when given its URL. Accepts an effort level (low / medium / high / xhigh / max, default high). Use when the user invokes /claude-skills:code-review or asks to review their changes or a PR with this reviewer.
+description: Review code changes and report findings — never plans or applies fixes. Runs 15 focused finder angles (line scan, removed behavior, cross-file callers, language pitfalls, wrappers, error handling, type invariants, security, tests, reuse, simplification, efficiency, altitude, comment accuracy, CLAUDE.md conventions) plus a gap sweep, every agent on opus, then verifies each finding with an adversarial opus agent. Reviews the current branch's changes against its PR base by default, or a teammate's GitHub PR when given its URL. Accepts an effort level (low / medium / high / xhigh / max, default high). Use when the user invokes /claude-skills:code-review or asks to review their changes or a PR with this reviewer.
 argument-hint: "[low|medium|high|xhigh|max] [PR URL]"
 ---
 
