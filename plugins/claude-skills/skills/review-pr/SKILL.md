@@ -134,6 +134,24 @@ voice, at most 6 lines each:
 - no AI or Claude attribution, no "great catch" / "good point", no restating their code
   back at them, no internal angle names.
 
+## Step 5b — Humanize the comments
+
+Run `Skill({ skill: "claude-skills:humanizer" })` once over every drafted comment and
+the review body, passed together and labeled by `file:line` so each rewrite maps back to
+its comment. Then replace each draft with its rewritten text.
+
+Use only humanizer's pattern removal (AI vocabulary, em-dash overuse, rule of three,
+negative parallelisms, inflated or hedged phrasing). Skip its "personality and soul"
+guidance: a teammate's review comment gets no added opinions, humor, first-person
+asides, or reactions. Do not ask the user anything, and skip its draft/audit output.
+Keep only the final text.
+
+The rewrite must not change meaning. Keep every one of these exactly as drafted: code in
+backticks, identifiers, file paths, line numbers, numbers, the `Nit: ` prefix, the
+**Outside this PR's diff** heading, and each comment's issue/fix content. If a rewrite
+drops or alters any of them, keep the draft for that comment. Comments stay at most 6
+lines.
+
 ## Step 6 — Decide the review state
 
 **Something did not run** when any of these hold: the code review's
