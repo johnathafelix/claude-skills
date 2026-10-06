@@ -3,25 +3,30 @@
 
 A request is watched while `<ts>.url` exists and no review is running (`<ts>.tmp`)
 or waiting to be finished (`<ts>.out`). `<ts>.head` holds the head the last review
-started on, `<ts>.reviews` how many reviews finished. For each request it prints at
-most one line:
+or approval was on, `<ts>.reviews` how many reviews finished. For each request it
+prints at most one line:
 
     due <ts> <sha> <url>       head moved and has not changed for the grace period
-    capped <ts> <url>          head moved after the last allowed review; only <ts>.done is left
+    final <ts> <sha> <url>     same as due, for the last allowed review, which approves
+    approved <ts> <url>        head moved after the last allowed review; approved it, no review
     closed <ts> <state> <url>  PR merged or closed; only <ts>.done is left
     recovered <ts> <url>       a review whose process is gone; it will be retried
-    error <ts> <url> <message> gh failed; nothing changed
+    error <ts> <url> <message> gh failed; it is tried again next pass
 
 A new head is written to `<ts>.pending` with the time it was first seen, and becomes
 due once it is still the head after the grace period. A newer push restarts the wait.
+After the last allowed review a new head is approved right away, unless the PR is a
+draft or the user's own, which GitHub refuses to approve.
 
 `<ts>.done` and `<ts>.skipped` markers older than `since` are deleted: the channel is
 only read from `since` on, so nothing needs them.
 
     watch-prs.py <STATE dir> <grace seconds> <max reviews>
 """
+import functools
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -49,6 +54,48 @@ def prune(state):
     for path in [*state.glob("*.done"), *state.glob("*.skipped")]:
         if float(path.stem) < float(since):
             path.unlink()
+
+
+def error(ts, url, result):
+    message = result.stderr.strip().splitlines()
+    print(f"error {ts} {url} {message[-1] if message else result.returncode}")
+
+
+@functools.cache
+def my_login():
+    user = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True)
+
+    return user.stdout.strip()
+
+
+def approve(ts, url, info):
+    """Approve the head without a review. False when skipped or GitHub refused."""
+    if info["isDraft"] or info["author"]["login"] == my_login():
+        return False
+
+    pr = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+    if not pr:
+        print(f"error {ts} {url} not a PR URL")
+        return False
+
+    owner, repo, number = pr.groups()
+
+    result = subprocess.run(
+        [
+            "gh", "api", "-X", "POST", f"repos/{owner}/{repo}/pulls/{number}/reviews",
+            "-f", "event=APPROVE",
+            "-f", f"commit_id={info['headRefOid']}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error(ts, url, result)
+        return False
+
+    print(f"approved {ts} {url}")
+
+    return True
 
 
 def recover(state, now):
@@ -85,13 +132,12 @@ def main():
 
         url = read(url_file)
         pr = subprocess.run(
-            ["gh", "pr", "view", url, "--json", "state,headRefOid"],
+            ["gh", "pr", "view", url, "--json", "state,headRefOid,isDraft,author"],
             capture_output=True,
             text=True,
         )
         if pr.returncode != 0:
-            message = pr.stderr.strip().splitlines()
-            print(f"error {ts} {url} {message[-1] if message else pr.returncode}")
+            error(ts, url, pr)
             continue
 
         info = json.loads(pr.stdout)
@@ -106,9 +152,12 @@ def main():
             pending.unlink(missing_ok=True)
             continue
 
-        if int(read(state / f"{ts}.reviews") or 0) >= max_reviews:
-            finish(state, ts)
-            print(f"capped {ts} {url}")
+        reviews = int(read(state / f"{ts}.reviews") or 0)
+        if reviews >= max_reviews:
+            if approve(ts, url, info):
+                (state / f"{ts}.head").write_text(f"{head}\n")
+                pending.unlink(missing_ok=True)
+
             continue
 
         seen_head, _, seen_at = read(pending).partition(" ")
@@ -117,7 +166,8 @@ def main():
             continue
 
         if now - int(seen_at) >= grace:
-            print(f"due {ts} {head} {url}")
+            kind = "final" if reviews == max_reviews - 1 else "due"
+            print(f"{kind} {ts} {head} {url}")
 
 
 if __name__ == "__main__":

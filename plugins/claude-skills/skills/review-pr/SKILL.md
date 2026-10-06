@@ -1,7 +1,7 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
-argument-hint: "<PR URL> [low|medium|high|xhigh|max]"
+description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. With `approve` it posts its comments and approves whatever it finds. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+argument-hint: "<PR URL> [low|medium|high|xhigh|max] [approve]"
 ---
 
 # Review PR
@@ -23,8 +23,11 @@ the turn on its task ID — wait for the completion notification, then post and 
 - Exactly one URL matching `https://github.com/<owner>/<repo>/pull/<number>` → `OWNER`,
   `REPO`, `PR_NUMBER`. Missing → stop and show usage.
 - Optional `low` / `medium` / `high` / `xhigh` / `max` → `EFFORT`, default `high`.
+- Optional `approve` → `FORCE_APPROVE = true`, default `false`. Step 6 then approves
+  whatever the review finds. `review-requests` passes it on a PR's last review, so a
+  teammate is not blocked forever.
 - Anything else → stop and show usage:
-  `/claude-skills:review-pr <https://github.com/<owner>/<repo>/pull/<n>> [low|medium|high|xhigh|max]`.
+  `/claude-skills:review-pr <https://github.com/<owner>/<repo>/pull/<n>> [low|medium|high|xhigh|max] [approve]`.
 
 ## Step 2 — Pre-checks
 
@@ -194,6 +197,7 @@ The first row that matches decides:
 
 | Situation | Event | Posts |
 |---|---|---|
+| `FORCE_APPROVE`, `CAN_APPROVE` | `APPROVE` | every comment, issues and nits, even when something did not run or `STILL_OPEN` is not empty |
 | something did not run | `COMMENT` | the comments; never approve when part of the review did not run |
 | any `issue` | `COMMENT` | the comments |
 | `STILL_OPEN` not empty, no findings | — | nothing; your earlier comments are still on the PR |
@@ -236,7 +240,7 @@ event.
 - Which checks ran (code review, `golang-check` / `ts-check`, `test-check`) and whether
   coverage was measured — with the reason if not.
 - Anything that did not run, stated plainly as not a clean pass and the reason the PR
-  was not approved.
+  was not approved (or, with `FORCE_APPROVE`, that it was approved anyway).
 - `test-check` `unchallenged` items (not posted), and how many language-check findings
   the verifier refuted.
 - How many findings were skipped as already reported, and one line per `STILL_OPEN`
@@ -253,6 +257,7 @@ REVIEW_RESULT: <outcome>
 |---|---|
 | `approved` | posted `APPROVE` with no comments |
 | `approved_nits` | posted `APPROVE` with nit comments |
+| `approved_comments` | posted `APPROVE` with at least one `issue` comment (only with `approve`) |
 | `commented` | posted `COMMENT` |
 | `no_findings` | zero findings, not `CAN_APPROVE`; nothing posted |
 | `still_open` | `STILL_OPEN` not empty and no findings; nothing posted |

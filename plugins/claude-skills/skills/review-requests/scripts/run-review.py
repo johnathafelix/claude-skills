@@ -10,8 +10,9 @@ The session is pinned to opus, so the polling session can run on a cheaper model
 without weakening the review.
 
 Run from the PR repo's clone. Prints {"result": "<last turn's text>"} on stdout.
+`approve` is passed on to review-pr, which then approves whatever it finds.
 
-    run-review.py <PR URL>
+    run-review.py <PR URL> [approve]
 """
 import json
 import subprocess
@@ -23,8 +24,8 @@ TIMEOUT_SECONDS = 3 * 60 * 60
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: run-review.py <PR URL>")
+    if len(sys.argv) < 2 or sys.argv[2:] not in ([], ["approve"]):
+        sys.exit("usage: run-review.py <PR URL> [approve]")
 
     session = subprocess.Popen(
         [
@@ -44,7 +45,7 @@ def main():
     timer = threading.Timer(TIMEOUT_SECONDS, session.kill)
     timer.start()
 
-    prompt = f"/claude-skills:review-pr {sys.argv[1]}"
+    prompt = "/claude-skills:review-pr " + " ".join(sys.argv[1:])
     session.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
     session.stdin.flush()
 

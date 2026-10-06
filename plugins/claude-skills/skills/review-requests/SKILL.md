@@ -1,6 +1,6 @@
 ---
 name: review-requests
-description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies with the outcome. Keeps watching each reviewed PR: re-reviews it once a new push has sat for 10 minutes, up to 3 reviews per PR, and stops when it is merged or closed. State lives in ~/.claude/review-requests, so a restarted session carries on. Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 5 minutes (configurable). Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
+description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies with the outcome. Keeps watching each reviewed PR: re-reviews it once a new push has sat for 10 minutes, up to 2 reviews per PR; the 2nd review always approves, and every later push is approved without a review. Stops when the PR is merged or closed. State lives in ~/.claude/review-requests, so a restarted session carries on. Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Invoke once; it schedules itself to repeat every 5 minutes (configurable). Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
 argument-hint: ""
 ---
 
@@ -124,6 +124,7 @@ when the headless session exits. For every `STATE/*.out`:
 |---|---|
 | `commented` | left some comments |
 | `approved_nits` | left some nit comments, but approved! 🚀 |
+| `approved_comments` | left some comments, but approved to unblock you 🚀 |
 | `approved` | approved! 🚀 |
 | `no_findings` | done! 🚀 |
 | `merged` | — |
@@ -137,8 +138,8 @@ when the headless session exits. For every `STATE/*.out`:
    - `merged` / `closed` → delete the other `STATE/<ts>.*` files and write
      `STATE/<ts>.done`, so the request is never picked up again.
    - `head_moved` → delete `<ts>.out`, `<ts>.err` and `<ts>.head`, and write
-     `STATE/<ts>.retry`. The PR stays watched: Step 3b marks it `due` once the new head
-     settles, and Step 4 restarts it without a second "reviewing..." reply.
+     `STATE/<ts>.retry`. The PR stays watched: Step 3b marks it `due` (or `final`) once
+     the new head settles, and Step 4 restarts it without a second "reviewing..." reply.
    - `error` → keep `<ts>.out` and `<ts>.err`, rename `<ts>.url` to `<ts>.failed`, and
      tell the user the PR URL, the last lines of `.result` and `.err`, and how to retry:
      rename `<ts>.failed` back to `<ts>.url`, delete `<ts>.out`, `<ts>.err` and
@@ -155,7 +156,7 @@ instead of waiting for the next pass.
 ## Step 3b — Watch reviewed PRs
 
 ```bash
-"<absolute dir of this SKILL.md>/scripts/watch-prs.py" "<STATE>" 600 3
+"<absolute dir of this SKILL.md>/scripts/watch-prs.py" "<STATE>" 600 2
 ```
 
 It checks every watched PR (a `<ts>.url` with no review running) with `gh` and prints
@@ -163,14 +164,19 @@ one line per PR that needs something:
 
 - `due <ts> <sha> <url>` — the head moved past the last review and has not changed for
   10 minutes. Step 4 re-reviews it.
-- `capped <ts> <url>` — the head moved after the PR's 3rd review, so it is not reviewed
-  again. The script already deleted the request's files, leaving an empty `<ts>.done`.
-  Reply `review limit reached, ping me if you need another look` in its thread.
+- `final <ts> <sha> <url>` — same as `due`, but it is the PR's 2nd review. Step 4
+  re-reviews it with `approve`, so it approves whatever it finds and unblocks the
+  teammate.
+- `approved <ts> <url>` — the head moved after the PR's 2nd review. The script approved
+  it right away, with no review, and keeps watching the PR. Reply
+  `approved the new changes to unblock you 🚀` in its thread, with no "reviewing..."
+  first. A draft or the user's own PR is skipped silently, since GitHub refuses to
+  approve it.
 - `closed <ts> <merged|closed> <url>` — the script already deleted the request's files,
   leaving an empty `<ts>.done`. Post nothing to Slack.
 - `recovered <ts> <url>` — its review was running in a session that is gone (no process
-  holds its `.tmp`). The script turned it into a retry, so it comes back as `due` once
-  the head has been still for 10 minutes. Tell the user.
+  holds its `.tmp`). The script turned it into a retry, so it comes back as `due` (or
+  `final`) once the head has been still for 10 minutes. Tell the user.
 - `error <ts> <url> <message>` — `gh` failed; tell the user. It is checked again next
   pass.
 
@@ -195,18 +201,18 @@ request** when all hold:
 The `STATE` files are the only record of what was handled. That is enough, because only
 messages after `SINCE` are read and every one of them that this watch handled has a file.
 
-A **re-review** is a `due` line from Step 3b.
+A **re-review** is a `due` or `final` line from Step 3b.
 
 Running reviews = the number of `STATE/*.tmp` files. A `.tmp` left by a session that
 crashed keeps counting; if one is older than 2 hours, tell the user. While fewer than
 **2** are running, take new requests oldest first, then re-reviews oldest first — a
 teammate who just asked goes ahead of a PR that only changed. The rest wait for a later
-pass (Step 3b prints a waiting re-review as `due` again).
+pass (Step 3b prints a waiting re-review again).
 
 For each one taken:
 
-1. **PR URL** — re-review: the URL on its `due` line. New request: the first PR URL in
-   the message; if it has more, tell the user which ones were not reviewed.
+1. **PR URL** — re-review: the URL on its `due` or `final` line. New request: the first
+   PR URL in the message; if it has more, tell the user which ones were not reviewed.
 2. **Still open?** — `gh pr view <url> --json state,headRefOid`. `state` is not `OPEN`
    → delete the other `STATE/<ts>.*` files and write `STATE/<ts>.done`. Post nothing to
    Slack: replying would revive an old thread and notify everyone in it. `gh` fails →
@@ -225,9 +231,11 @@ For each one taken:
    `STATE/<ts>.pending`, then run with `Bash` `run_in_background: true`:
 
    ```bash
-   { cd "<CLONE>" && "<absolute dir of this SKILL.md>/scripts/run-review.py" "<PR URL>"; } \
+   { cd "<CLONE>" && "<absolute dir of this SKILL.md>/scripts/run-review.py" "<PR URL>" <FLAG>; } \
      > "<STATE>/<ts>.tmp" 2> "<STATE>/<ts>.err"; mv "<STATE>/<ts>.tmp" "<STATE>/<ts>.out"
    ```
+
+   `<FLAG>` is `approve` for a `final` line, and left out otherwise.
 
    `run-review.py` runs `/claude-skills:review-pr` in its own headless session and waits
    for its `REVIEW_RESULT` line (plain `claude -p` would exit before the review's
@@ -240,6 +248,7 @@ that far back. While one is waiting, `SINCE` stays put so it is read again.
 
 ## Step 5 — Report
 
-One short line: reviews finished (PR and outcome), reviews and re-reviews started, PRs no
-longer watched (merged, closed or capped), reviews recovered, requests waiting for a free
-slot, and anything skipped or failed. Nothing else — this runs every few minutes.
+One short line: reviews finished (PR and outcome), reviews and re-reviews started, PRs
+approved without a review, PRs no longer watched (merged or closed), reviews recovered,
+requests waiting for a free slot, and anything skipped or failed. Nothing else — this
+runs every few minutes.
