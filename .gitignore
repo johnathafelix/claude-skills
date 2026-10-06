@@ -7,3 +7,6 @@
 
 # Sandboxes from test/format-with-prettier.test.js; cleaned up unless a run crashes
 test/tmp-sandbox-*/
+
+# Python bytecode from running the skill scripts locally
+__pycache__/
