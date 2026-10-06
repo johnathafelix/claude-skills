@@ -123,6 +123,8 @@ class Pass:
         self.notes = []
         self.alerts = []
         self.tokens = 0
+        self.cache_reads = 0
+        self.cache_ttls = set()
 
     def slack(self, call, *args):
         """Runs slack.read or slack.post, once more after 30s if the connector is not up yet."""
@@ -137,7 +139,16 @@ class Pass:
             for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
         )
 
+        self.cache_reads += usage.get("cache_read_input_tokens") or 0
+        writes = usage.get("cache_creation") or {}
+        self.cache_ttls |= {ttl for ttl in ("5m", "1h") if writes.get(f"ephemeral_{ttl}_input_tokens")}
+
         return reply
+
+    def usage(self):
+        """Token summary for the log line; the TTL is that of the cache writes, when any."""
+        ttl = f", {'+'.join(sorted(self.cache_ttls))} TTL" if self.cache_ttls else ""
+        return f"[{self.tokens} tokens, {self.cache_reads} cache reads{ttl}]"
 
     def post_outbox(self):
         """Posts the queued replies. One still unconfirmed after MAX_POST_ATTEMPTS moves to
@@ -413,7 +424,7 @@ def main():
             print(*current.alerts, stop, sep="\n")
             sys.exit(2)
 
-        log(f"{'; '.join(current.notes + current.alerts) or 'idle'} [{current.tokens} tokens]")
+        log(f"{'; '.join(current.notes + current.alerts) or 'idle'} {current.usage()}")
 
         if current.alerts:
             print(*current.alerts, sep="\n")
