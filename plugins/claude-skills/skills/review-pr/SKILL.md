@@ -12,8 +12,8 @@ inline comments, and approve it if nothing but nits remain.
 
 **This skill posts to GitHub without asking.** Invoking it is the user's approval to
 post a review under their account. It never edits code, pushes, merges, or resolves
-threads. It does run the PR's test suite inside a temporary worktree, for `test-check`
-coverage.
+threads. It does install the PR's dependencies and run its test suite inside a temporary
+worktree, for `test-check` coverage.
 
 **Dispatching is not finishing.** The review runs as a background `Workflow`. Do not end
 the turn on its task ID — wait for the completion notification, then post and report.
@@ -112,8 +112,11 @@ under `$WT`**. Their instructions run in this context, so while following them:
 - `BASE_BRANCH` is the PR base, and any diff they compute uses `origin/$BASE...HEAD` (for
   `test-check`'s `changedRanges` too);
 - `test-check` coverage: run the suite inside `$WT` with the report written to the
-  scratchpad. If `$WT` has no `node_modules`, **do not install dependencies** — coverage
-  is UNVERIFIED with that reason;
+  scratchpad. Never skip it for missing dependencies. If `$WT` has a `package.json` but
+  no `node_modules`, install first, in `$WT`: `yarn install --frozen-lockfile` when
+  `yarn.lock` exists, `npm ci` when `package-lock.json` exists, `npm install` otherwise.
+  Coverage is UNVERIFIED only when the install or the suite itself fails — with that
+  error as the reason;
 - skip their present-to-user steps and post nothing from them — keep the raw results for
   Step 3c.
 
@@ -212,8 +215,8 @@ lines.
 **Something did not run** when any of these hold: the code review's
 `dimensionsUnverified` is non-empty; a `golang-check` or `ts-check` guideline is
 UNVERIFIED; the verify-only run's `dimensionsUnverified` is non-empty; or a `test-check`
-`unverified` guideline is anything other than `coverage`. Coverage not running (e.g. a TS
-worktree without `node_modules`) does **not** count — report it to the user, but it does
+`unverified` guideline is anything other than `coverage`. Coverage not running (e.g. the
+install or the suite failed) does **not** count — report it to the user, but it does
 not block approval.
 
 The first row that matches decides:
