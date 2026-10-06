@@ -10,7 +10,8 @@
  *   3. Marker'd commits and --amend commits -> validate message:
  *        - subject matches conventional `type(scope)?!: summary`
  *        - subject <= 72 chars
- *        - subject lowercase (body may carry caps for code identifiers)
+ *        - subject lowercase, except identifiers: acronyms, env vars, tickets,
+ *          camelCase/PascalCase and `code spans` (body may carry any caps)
  *        - no co-author / claude / AI-generated / 🤖 attribution lines
  *      On violation -> deny with reasons. On pass -> allow.
  *
@@ -23,6 +24,8 @@ const SKILL_MARKER = "CC_GIT_SKILL=1";
 
 const TYPES = "feat|fix|refactor|chore|docs|test|style|perf|ci|build|revert";
 const SUBJECT_RE = new RegExp(`^(${TYPES})(\\([^)]+\\))?!?: .+`);
+// A capitalized word ("Add") or lone capital ("A") is prose, not an identifier.
+const SENTENCE_CASE_WORD_RE = /^[A-Z][a-z0-9]*$/;
 const FORBIDDEN = [
   { re: /co-authored-by/i, msg: "remove co-author line" },
   { re: /generated with .*claude/i, msg: "remove 'generated with claude' line" },
@@ -77,6 +80,13 @@ function deny(reasons) {
   process.exit(0);
 }
 
+function hasSentenceCaseWord(subject) {
+  return subject
+    .replace(/`[^`]*`/g, "")
+    .split(/[^A-Za-z0-9_]+/)
+    .some((word) => SENTENCE_CASE_WORD_RE.test(word));
+}
+
 /** Pull the commit message out of a `git commit` command, or null if none/editor. */
 function extractMessage(cmd) {
   // heredoc: git commit -m "$(cat <<'EOF' ... EOF )"
@@ -129,8 +139,10 @@ function main() {
     reasons.push(`subject is ${subject.length} chars; keep <= 72`);
   }
 
-  if (/[A-Z]/.test(subject)) {
-    reasons.push("subject must be lowercase");
+  if (hasSentenceCaseWord(subject)) {
+    reasons.push(
+      "subject must be lowercase; only identifiers (API, REVIEW_PR_EFFORT, ENG-123, getUser, `Code`) may carry caps"
+    );
   }
 
   for (const { re, msg: m } of FORBIDDEN) {

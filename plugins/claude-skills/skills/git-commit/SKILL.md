@@ -29,7 +29,7 @@ Commit changes following conventional commit conventions with descriptive messag
 
 4. **Create commit**:
    - Use conventional commit format for the title
-   - **The title (subject line) must be completely in lowercase** — no uppercase letters; the body may use caps where needed for code identifiers (e.g. `GetPortfolio`)
+   - **The title (subject line) must be lowercase** — no capitalized words (`Add`, `Fix`). Identifiers keep their case: acronyms (`API`), env vars (`REVIEW_PR_EFFORT`), tickets (`ENG-123`), camelCase/PascalCase (`getUser`, `GetPortfolio`) and anything in backticks. The body may use caps freely
    - Keep title under 72 characters
    - Add detailed body describing what and why (not how)
    - Use HEREDOC format for multi-line messages
