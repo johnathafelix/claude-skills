@@ -47,39 +47,28 @@ Running the suite is the one non-read-only thing this skill does, and it writes 
 
 ### Step 2 — Discover guidelines (do not read them)
 
-List every `*.md` in the `guidelines/` directory that sits **alongside this SKILL.md**. Resolve that directory to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`). You will pass these absolute paths through to the check in Step 3.
+Resolve the `guidelines/` directory that sits **alongside this SKILL.md** to an absolute path from this SKILL.md's own location — do **not** hardcode a home directory (the skill may be installed under `~/.claude/plugins/…`, not `~/.claude/skills/…`). Each `*.md` in it is one guideline, named by its stem.
 
-**Do not `Read` the guideline bodies here** — the orchestrator only needs filenames plus a few cheap facts per guideline, all obtainable without opening any file individually. Take **one glob-based command per fact**, not a per-file loop.
+**Do not `Read` the guideline bodies here.** Stage the check's script instead: one command copies `workflow.js` into the session scratchpad and injects every guideline's proof-of-read anchors (absolute path, `wc -l` line count, first line, last non-empty line), computed from the files themselves. **Never compute or hand-copy those anchors yourself** — a single mistyped character in a long last line fails the gate and reports the guideline UNVERIFIED.
 
-In every command below, `$G` stands for the **absolute** `guidelines/` directory you just resolved — substitute the real path when you run it. Your working directory is the user's repo, not this skill's directory, so a bare `guidelines/*.md` does not expand here. **Quote the fixed part of the path and leave the `*` unquoted** — `'$G/'*.md` — because a fully quoted glob stops expanding while an unquoted path breaks on a space.
+`$G` stands for the **absolute** `guidelines/` directory you just resolved, and `<scratchpad>` for the scratchpad directory named in your environment — substitute the real paths before running:
 
-1. **Line count**, via `wc -l '$G/'*.md`. This prints one line per file plus a trailing `total` line — **ignore the `total` line**, it is not a guideline. Parse each row as: the count is the **leading integer**, and the path is **everything after that first run of spaces** — do not split on whitespace, or a path such as `/Users/John Smith/…` gets cut in half. Each per-file count becomes that guideline's `lines` value, used later as a proof-of-read check on the agent that applies it — pass the same absolute path to that agent so both sides run the identical command against the identical file.
-2. **First line + last non-empty line**, via one tab-delimited command with no header lines to strip:
+```bash
+node "$(dirname '$G')/../../scripts/stage-workflow.js" '$G' "$(dirname '$G')/workflow.js" "<scratchpad>/test-check-workflow.js"
+```
 
-   ```
-   awk 'FNR==1{a[FILENAME]=$(0)} NF{b[FILENAME]=$(0)} END{for (f in a) printf "%s\t%s\t%s\n", f, a[f], b[f]}' '$G/'*.md
-   ```
-
-   Each row is `path <TAB> firstLine <TAB> lastNonEmptyLine` — split on tabs, since guideline bodies contain none. These two strings are **body anchors** for the proof-of-read: they make the checker prove it saw the file's contents, not merely that a command ran. Pass them through **verbatim** as `title` and `lastLine` — do not trim, re-title, or tidy them, and never substitute the filename. The script normalizes whitespace and letter case when it compares. If you omit either, the script logs a `proof-of-read leg DISABLED` warning and falls back to the line count alone, which is the weaker gate this replaced.
-
-   **Do not take `lines` from this command.** `awk` counts lines read while `wc -l` counts newlines; they disagree by one on a file with no trailing newline, and since the checker agent runs `wc -l`, that would make the guideline's gate permanently unmatchable. Item 1 is authoritative for `lines`.
+It prints one `stem <TAB> absolute path <TAB> first line` row per guideline; the fallback path in Step 3 uses that path. Stage into the scratchpad, not the user's repo, where it would show up as an untracked file. If the session declares no scratchpad directory, stage to a `mktemp` path instead.
 
 **Which guidelines to dispatch.** All of them, with two exceptions:
 
 - `coverage` — dispatch only when `coverageFile` is non-empty. When it is empty, do **not** dispatch it; list it as UNVERIFIED in Step 4 with the Step 1b reason. (Dispatching it without a report would return `[]`, which reads as a clean pass.)
 - Any guideline the user explicitly asked to skip.
 
-Build the list you'll pass to the check:
+Build the list you'll pass to the check — only `stem`; the staged script already holds each guideline's path and anchors:
 
 ```
 guidelines = [
-  {
-    stem:     "assertion-fidelity",
-    path:     "/abs/.../guidelines/assertion-fidelity.md",   # absolute; the same path the agent will wc -l
-    lines:    58,                                            # item 1 (wc -l) — NOT the awk row count
-    title:    "# Guideline: Assertions match what the test claims",   # item 2 field 2, verbatim
-    lastLine: "Every finding here must quote the test name verbatim — …",  # item 2 field 3, verbatim
-  },
+  { stem: "assertion-fidelity" },           # a stem printed by the staging command
   ...
 ]
 ```
@@ -88,13 +77,7 @@ guidelines = [
 
 **Primary path — `Workflow`:**
 
-`Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the working directory or a directory added to the session. When this skill is installed as a plugin its `workflow.js` lives under `~/.claude/plugins/cache/...`, which is neither, so passing that path directly fails with *"scriptPath must be a script path this tool returned, or a file you can already read"*. Copy it into the session scratchpad directory (the absolute path is given in your environment) and dispatch from there — not into the user's repo, where it would show up as an untracked file in their working tree. `workflow.js` sits **alongside this SKILL.md**, one level above the `guidelines/` directory resolved in Step 2 — derive it from that same `$G`, and substitute the real absolute paths for `$G` and `<scratchpad>` before running the copy:
-
-```bash
-cp "$(dirname '$G')/workflow.js" "<scratchpad>/test-check-workflow.js"
-```
-
-If the session declares no scratchpad directory, read `workflow.js` in full and pass its contents as `script` instead of `scriptPath` — that path has no directory dependency at all. This is the one file this skill may read into context: it is the script being executed, not a guideline body, so it does not reintroduce the reads Step 2 forbids.
+Dispatch the script staged in Step 2. `Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the working directory or a directory added to the session, which is why it is staged into the scratchpad rather than passed from the plugin cache. If you staged to a `mktemp` path (no scratchpad), read that staged file in full and pass its contents as `script` instead of `scriptPath`. This is the one file this skill may read into context: it is the script being executed, not a guideline body, so it does not reintroduce the reads Step 2 forbids. Never dispatch the unstaged `workflow.js` — it stops with "copied, not staged".
 
 ```
 Workflow({

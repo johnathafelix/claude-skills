@@ -33,6 +33,12 @@ const CONCURRENCY = 4
 
 const RETRIES = 2
 
+// [SHARED-CORE] Proof-of-read anchors per guideline stem: { path, lines, title,
+// lastLine }. scripts/stage-workflow.js replaces the null below with values
+// computed from the guideline files, so the orchestrator never transcribes them
+// by hand. Still null means the script was copied instead of staged.
+const GUIDELINE_META = null
+
 // Pinned, not inherited: a weaker session model degrades these checks invisibly —
 // a shallow read returns [], indistinguishable from a pass. Set on every agent()
 // call as well as in the agent definition because the Workflow contract says an
@@ -191,29 +197,23 @@ function normalizeGuideline(raw, i) {
   const stem = typeof raw.stem === 'string' ? raw.stem.trim() : ''
   if (!stem) return `guidelines[${i}] has no usable stem`
 
-  const path = typeof raw.path === 'string' ? raw.path.trim() : ''
-  if (!path) return `${stem}: no usable path`
+  const meta = GUIDELINE_META[stem]
+  if (!meta) return `${stem}: not a staged guideline (staged: ${Object.keys(GUIDELINE_META).join(', ')})`
 
-  // Coerced, not compared with ===: a string "24" from a JSON-string args
-  // payload could never match the agent's integer, costing 3 agent calls and a
-  // false UNVERIFIED for every guideline.
-  const lines = Number(raw.lines)
-  if (!Number.isInteger(lines) || lines <= 0) {
-    return `${stem}: lines is not a positive integer (got ${JSON.stringify(raw.lines)})`
-  }
+  const { path, lines } = meta
+  if (!Number.isInteger(lines) || lines <= 0) return `${stem}: guideline file is empty (${path})`
 
   // [SKILL-POLICY] Files are shared across guidelines (args.sourceFiles and
   // args.testFiles, validated at top level), so there is no per-guideline files
   // check here. golang-check scopes g.files per guideline instead.
 
-  // Body anchors for the proof-of-read. Absent ones are tolerated so a Step 2
-  // that predates them still runs — but NEVER silently: without these warnings a
-  // Step 2 regression would quietly revert the gate to line-count-only forever.
-  const title = normAnchor(raw.title)
-  const lastLine = normAnchor(raw.lastLine)
+  // Body anchors for the proof-of-read. Empty only when the guideline's first
+  // line is blank — tolerated, but NEVER silently, since that weakens the gate.
+  const title = normAnchor(meta.title)
+  const lastLine = normAnchor(meta.lastLine)
 
-  if (!title) log(`${stem}: WARNING — no "title" anchor supplied; proof-of-read leg 2 DISABLED (see SKILL.md Step 2)`)
-  if (!lastLine) log(`${stem}: WARNING — no "lastLine" anchor supplied; proof-of-read leg 3 DISABLED (see SKILL.md Step 2)`)
+  if (!title) log(`${stem}: WARNING — guideline's first line is blank; proof-of-read leg 2 DISABLED`)
+  if (!lastLine) log(`${stem}: WARNING — guideline has no non-empty line; proof-of-read leg 3 DISABLED`)
 
   return { stem, path, lines, title, lastLine }
 }
@@ -453,6 +453,10 @@ if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) 
     `test-check workflow received args of type ${Array.isArray(parsedArgs) ? 'array' : typeof parsedArgs} — ` +
       'expected an object with { guidelines, sourceFiles, testFiles, changedRanges, coverageFile, baseBranch, changeNote }',
   )
+}
+
+if (!GUIDELINE_META) {
+  throw new Error('test-check workflow was copied, not staged — stage it with scripts/stage-workflow.js (see SKILL.md)')
 }
 
 // An empty/missing guidelines list is never legitimate here — Step 1 of SKILL.md
