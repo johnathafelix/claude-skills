@@ -117,6 +117,32 @@ def outbox_posts():
     ]
 
 
+def cache_ttls(usage):
+    """The TTLs ("5m", "1h") of the cache writes in one API usage block."""
+    writes = usage.get("cache_creation") or {}
+    return {ttl for ttl in ("5m", "1h") if writes.get(f"ephemeral_{ttl}_input_tokens")}
+
+
+def token_summary(tokens, reads, writes, ttls):
+    """Token counts for a log line; the TTL is that of the cache writes, when any."""
+    ttl = f", {'+'.join(sorted(ttls))} TTL" if ttls else ""
+    return f"{tokens} tokens, {reads} cache reads, {writes} cache writes{ttl}"
+
+
+def review_usage(report):
+    """Token counts of a review session, every model and subagent included, from run-review.py."""
+    models = (report.get("model_usage") or {}).values()
+    if not models:
+        return ""
+
+    reads = sum(m.get("cacheReadInputTokens") or 0 for m in models)
+    writes = sum(m.get("cacheCreationInputTokens") or 0 for m in models)
+    tokens = reads + writes + sum((m.get("inputTokens") or 0) + (m.get("outputTokens") or 0) for m in models)
+    ttls = set().union(*(cache_ttls(usage) for usage in report.get("turn_usages") or []))
+
+    return f" (review: {token_summary(tokens, reads, writes, ttls)})"
+
+
 class Pass:
     def __init__(self, config):
         self.config = config
@@ -142,15 +168,12 @@ class Pass:
 
         self.cache_reads += usage.get("cache_read_input_tokens") or 0
         self.cache_writes += usage.get("cache_creation_input_tokens") or 0
-        writes = usage.get("cache_creation") or {}
-        self.cache_ttls |= {ttl for ttl in ("5m", "1h") if writes.get(f"ephemeral_{ttl}_input_tokens")}
+        self.cache_ttls |= cache_ttls(usage)
 
         return reply
 
     def usage(self):
-        """Token summary for the log line; the TTL is that of the cache writes, when any."""
-        ttl = f", {'+'.join(sorted(self.cache_ttls))} TTL" if self.cache_ttls else ""
-        return f"[{self.tokens} tokens, {self.cache_reads} cache reads, {self.cache_writes} cache writes{ttl}]"
+        return f"[{token_summary(self.tokens, self.cache_reads, self.cache_writes, self.cache_ttls)}]"
 
     def post_outbox(self):
         """Posts the queued replies. One still unconfirmed after MAX_POST_ATTEMPTS moves to
@@ -189,9 +212,11 @@ class Pass:
             url = read(STATE / f"{ts}.url")
 
             try:
-                result = json.loads(out.read_text()).get("result") or ""
+                report = json.loads(out.read_text())
             except json.JSONDecodeError:
-                result = out.read_text()
+                report = {"result": out.read_text()}
+
+            result = report.get("result") or ""
 
             match = re.search(r"REVIEW_RESULT:\s*(\w+)", result)
             outcome = match.group(1) if match and match.group(1) in REPLIES else "error"
@@ -210,7 +235,7 @@ class Pass:
             if REPLIES[outcome]:
                 queue_reply(thread_of(ts), labeled(ts, REPLIES[outcome]))
 
-            self.notes.append(f"{outcome} {url}")
+            self.notes.append(f"{outcome} {url}{review_usage(report)}")
 
             if outcome in ("merged", "closed"):
                 forget(ts, "done")

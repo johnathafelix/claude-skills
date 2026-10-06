@@ -9,7 +9,10 @@ for those turns, so this waits until a turn ends with the REVIEW_RESULT line.
 The session is pinned to opus, so the polling session can run on a cheaper model
 without weakening the review.
 
-Run from the PR repo's clone. Prints {"result": "<last turn's text>"} on stdout.
+Run from the PR repo's clone. Prints {"result": "<last turn's text>", "model_usage": {...},
+"turn_usages": [...]} on stdout: model_usage is the session's running total per model,
+subagents included, and turn_usages holds each turn's usage (main agent only), which
+alone tells the cache TTL.
 `approve` is passed on to review-pr, which then approves whatever it finds.
 
     run-review.py <PR URL> [approve]
@@ -50,6 +53,8 @@ def main():
     session.stdin.flush()
 
     result = ""
+    model_usage = {}
+    turn_usages = []
     for line in session.stdout:
         try:
             event = json.loads(line)
@@ -60,6 +65,8 @@ def main():
             continue
 
         result = event.get("result") or ""
+        model_usage = event.get("modelUsage") or model_usage
+        turn_usages.append(event.get("usage") or {})
         if MARKER in result:
             break
 
@@ -74,7 +81,7 @@ def main():
     if MARKER not in result:
         result += f"\n(session ended without {MARKER}; exit code {session.returncode})"
 
-    print(json.dumps({"result": result}))
+    print(json.dumps({"result": result, "model_usage": model_usage, "turn_usages": turn_usages}))
 
 
 if __name__ == "__main__":
