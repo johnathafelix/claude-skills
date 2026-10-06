@@ -105,8 +105,9 @@ are keyed `<ts>~2`, `<ts>~3`, ….
 3. **Watch reviewed PRs** — `scripts/watch-prs.py` (see its docstring) re-reviews a PR
    once a new head has sat for 10 minutes, with `approve` on the 2nd review; approves
    every later push right away with no review (reply: approved the new changes to
-   unblock you 🚀); forgets merged and closed PRs without posting; and recovers reviews
-   whose process is gone.
+   unblock you 🚀); skips a new head the user already reviewed (by hand or from another
+   session), with no review, approval or reply; forgets merged and closed PRs without
+   posting; and recovers reviews whose process is gone.
 4. **New requests** — a top-level message after `since`, not by the user, with at least
    one `https://github.com/<owner>/<repo>/pull/<number>` URL. Every PR in it with no
    `STATE/<key>.*` file yet is reviewed on its own. New requests go first, then

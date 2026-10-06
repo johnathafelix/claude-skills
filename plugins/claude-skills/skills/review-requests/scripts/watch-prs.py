@@ -9,6 +9,7 @@ prints at most one line:
     due <ts> <sha> <url>       head moved and has not changed for the grace period
     final <ts> <sha> <url>     same as due, for the last allowed review, which approves
     approved <ts> <url>        head moved after the last allowed review; approved it, no review
+    yours <ts> <url>           the user already reviewed the new head; it is taken as reviewed
     closed <ts> <state> <url>  PR merged or closed; only <ts>.done is left
     recovered <ts> <url>       a review whose process is gone; it will be retried
     error <ts> <url> <message> gh failed; it is tried again next pass
@@ -16,7 +17,8 @@ prints at most one line:
 A new head is written to `<ts>.pending` with the time it was first seen, and becomes
 due once it is still the head after the grace period. A newer push restarts the wait.
 After the last allowed review a new head is approved right away, unless the PR is a
-draft or the user's own, which GitHub refuses to approve.
+draft or the user's own, which GitHub refuses to approve. A head the user already
+reviewed (by hand, or from another session) is neither reviewed nor approved again.
 
 `<ts>` is the request's Slack ts, with `~<n>` added for the n-th PR of a request that
 named more than one.
@@ -71,21 +73,44 @@ def my_login():
     return user.stdout.strip()
 
 
+def pr_path(ts, url):
+    """`repos/<owner>/<repo>/pulls/<number>`, or None (and an error line) for a bad URL."""
+    pr = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+    if not pr:
+        print(f"error {ts} {url} not a PR URL")
+        return None
+
+    return "repos/{}/{}/pulls/{}".format(*pr.groups())
+
+
+def reviewed_by_me(ts, url, head):
+    """True when one of the user's reviews is on `head`. A failed lookup counts as no:
+    review-pr checks again before reviewing."""
+    path = pr_path(ts, url)
+    if not path:
+        return False
+
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"{path}/reviews", "--jq", f'.[] | select(.user.login == "{my_login()}") | .commit_id'],
+        capture_output=True,
+        text=True,
+    )
+
+    return result.returncode == 0 and head in result.stdout.split()
+
+
 def approve(ts, url, info):
     """Approve the head without a review. False when skipped or GitHub refused."""
     if info["isDraft"] or info["author"]["login"] == my_login():
         return False
 
-    pr = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
-    if not pr:
-        print(f"error {ts} {url} not a PR URL")
+    path = pr_path(ts, url)
+    if not path:
         return False
-
-    owner, repo, number = pr.groups()
 
     result = subprocess.run(
         [
-            "gh", "api", "-X", "POST", f"repos/{owner}/{repo}/pulls/{number}/reviews",
+            "gh", "api", "-X", "POST", f"{path}/reviews",
             "-f", "event=APPROVE",
             "-f", f"commit_id={info['headRefOid']}",
         ],
@@ -99,6 +124,11 @@ def approve(ts, url, info):
     print(f"approved {ts} {url}")
 
     return True
+
+
+def take_as_reviewed(state, ts, head):
+    (state / f"{ts}.head").write_text(f"{head}\n")
+    (state / f"{ts}.pending").unlink(missing_ok=True)
 
 
 def recover(state, now):
@@ -157,9 +187,11 @@ def main():
 
         reviews = int(read(state / f"{ts}.reviews") or 0)
         if reviews >= max_reviews:
-            if approve(ts, url, info):
-                (state / f"{ts}.head").write_text(f"{head}\n")
-                pending.unlink(missing_ok=True)
+            if reviewed_by_me(ts, url, head):
+                take_as_reviewed(state, ts, head)
+                print(f"yours {ts} {url}")
+            elif approve(ts, url, info):
+                take_as_reviewed(state, ts, head)
 
             continue
 
@@ -168,9 +200,16 @@ def main():
             pending.write_text(f"{head} {now}\n")
             continue
 
-        if now - int(seen_at) >= grace:
-            kind = "final" if reviews == max_reviews - 1 else "due"
-            print(f"{kind} {ts} {head} {url}")
+        if now - int(seen_at) < grace:
+            continue
+
+        if reviewed_by_me(ts, url, head):
+            take_as_reviewed(state, ts, head)
+            print(f"yours {ts} {url}")
+            continue
+
+        kind = "final" if reviews == max_reviews - 1 else "due"
+        print(f"{kind} {ts} {head} {url}")
 
 
 if __name__ == "__main__":
