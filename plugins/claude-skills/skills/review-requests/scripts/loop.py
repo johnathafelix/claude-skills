@@ -124,6 +124,7 @@ class Pass:
         self.alerts = []
         self.tokens = 0
         self.cache_reads = 0
+        self.cache_writes = 0
         self.cache_ttls = set()
 
     def slack(self, call, *args):
@@ -140,6 +141,7 @@ class Pass:
         )
 
         self.cache_reads += usage.get("cache_read_input_tokens") or 0
+        self.cache_writes += usage.get("cache_creation_input_tokens") or 0
         writes = usage.get("cache_creation") or {}
         self.cache_ttls |= {ttl for ttl in ("5m", "1h") if writes.get(f"ephemeral_{ttl}_input_tokens")}
 
@@ -148,7 +150,7 @@ class Pass:
     def usage(self):
         """Token summary for the log line; the TTL is that of the cache writes, when any."""
         ttl = f", {'+'.join(sorted(self.cache_ttls))} TTL" if self.cache_ttls else ""
-        return f"[{self.tokens} tokens, {self.cache_reads} cache reads{ttl}]"
+        return f"[{self.tokens} tokens, {self.cache_reads} cache reads, {self.cache_writes} cache writes{ttl}]"
 
     def post_outbox(self):
         """Posts the queued replies. One still unconfirmed after MAX_POST_ATTEMPTS moves to
