@@ -33,6 +33,9 @@ approval to reply in the channel under their account, and to post reviews throug
   user's Slack ID, used only to skip their own messages.
 - **Interval (optional):** `REVIEW_REQUESTS_INTERVAL_MINUTES` in the same `env` block,
   a whole number from 1 to 59. Default 5.
+- **Review effort (optional):** `REVIEW_PR_EFFORT` in the same `env` block — `low`,
+  `medium`, `high`, `xhigh` or `max`. Default `high`. The headless sessions inherit it, and
+  `review-pr` reads it.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
   cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else
   `~/repos`.

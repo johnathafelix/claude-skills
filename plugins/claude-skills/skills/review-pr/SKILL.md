@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. With `approve` it posts its comments and approves whatever it finds. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high, or REVIEW_PR_EFFORT) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. With `approve` it posts its comments and approves whatever it finds. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
 argument-hint: "<PR URL> [low|medium|high|xhigh|max] [approve]"
 ---
 
@@ -22,7 +22,10 @@ the turn on its task ID — wait for the completion notification, then post and 
 
 - Exactly one URL matching `https://github.com/<owner>/<repo>/pull/<number>` → `OWNER`,
   `REPO`, `PR_NUMBER`. Missing → stop and show usage.
-- Optional `low` / `medium` / `high` / `xhigh` / `max` → `EFFORT`, default `high`.
+- Optional `low` / `medium` / `high` / `xhigh` / `max` → `EFFORT`. Not given → the
+  value of `echo "${REVIEW_PR_EFFORT:-high}"`, which the user can set in the `env` block
+  of `~/.claude/settings.json`. That value must be one of the five levels; anything else
+  → stop and tell the user the allowed values.
 - Optional `approve` → `FORCE_APPROVE = true`, default `false`. Step 6 then approves
   whatever the review finds. `review-requests` passes it on a PR's last review, so a
   teammate is not blocked forever.
