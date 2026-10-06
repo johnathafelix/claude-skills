@@ -63,8 +63,7 @@ The background task's output says why. Relay it to the user in a few lines, then
 - **Exit 0** — something the user should know: a review failed (with the PR, the last
   lines of its output, and how to retry), a review whose process was gone and will be
   retried, a request skipped because its repo could not be cloned or the clone holds a
-  different repo, a repo that was cloned, a request that named more than one PR (only
-  the first is reviewed), or a reply Slack never confirmed (moved to
+  different repo, a repo that was cloned, or a reply Slack never confirmed (moved to
   `STATE/outbox/failed`; it may or may not have been posted). Start the loop again
   (Step 1, without the intro).
 - **Exit 2** — the config is missing or invalid, the Slack connector is not connected,
@@ -78,8 +77,9 @@ The background task's output says why. Relay it to the user in a few lines, then
 
 State lives in `~/.claude/review-requests` (`STATE`), outside any session, so a later
 loop finishes or retries the reviews that were running, keeps re-reviewing watched PRs,
-and reviews requests posted while nothing was watching. Requests are keyed by their
-Slack timestamp `<ts>`.
+and reviews requests posted while nothing was watching. Each PR is keyed by its
+request's Slack timestamp `<ts>`; when a request names several PRs, the 2nd, 3rd, …
+are keyed `<ts>~2`, `<ts>~3`, ….
 
 1. **Start time** — `STATE/since` holds the Slack timestamp the channel is read from.
    Missing → the first pass writes now and does nothing else, so nothing older is
@@ -107,13 +107,17 @@ Slack timestamp `<ts>`.
    every later push right away with no review (reply: approved the new changes to
    unblock you 🚀); forgets merged and closed PRs without posting; and recovers reviews
    whose process is gone.
-4. **New requests** — a top-level message after `since`, not by the user, with a
-   `https://github.com/<owner>/<repo>/pull/<number>` URL, and no `STATE/<ts>.*` file
-   yet. New requests go first, then re-reviews, oldest first, while fewer than 2
-   reviews run. Each one: a PR that is no longer open is marked done with no reply; the
-   clone is checked (or cloned); "reviewing..." is posted unless it is a retry; then
+4. **New requests** — a top-level message after `since`, not by the user, with at least
+   one `https://github.com/<owner>/<repo>/pull/<number>` URL. Every PR in it with no
+   `STATE/<key>.*` file yet is reviewed on its own. New requests go first, then
+   re-reviews, oldest first, while fewer than 2 reviews run. Each one: a PR that is no
+   longer open is marked done with no reply; the clone is checked (or cloned);
+   "reviewing..." is posted once per request (and again on a re-review, never on a
+   retry); then
    `scripts/run-review.py` runs `/claude-skills:review-pr` in its own headless session,
    detached from the loop. `since` moves forward once no new request is left waiting.
+   With several PRs, every reply after "reviewing..." starts with the PR's
+   `<repo>#<number>`, e.g. `commerce-scs#206: left some comments`.
 
 Slack replies go through an outbox (`STATE/outbox`). An entry is deleted once Slack
 confirms the post, retried on the next pass if not, and moved to `STATE/outbox/failed`

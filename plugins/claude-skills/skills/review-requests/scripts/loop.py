@@ -12,12 +12,17 @@ One line per pass goes to STATE/log. The loop exits, printing what happened, whe
 user has to know or act:
 
     exit 0   a review failed, a review was recovered, a request was skipped, a repo was
-             cloned, a request had more than one PR, or a reply could not be confirmed.
+             cloned, or a reply could not be confirmed.
              Relay and start the loop again.
     exit 2   config missing or invalid, the Slack connector is unavailable, or the
              channel read failed MAX_SLACK_ERRORS passes in a row. Relay and do not
              restart.
     exit 3   another loop already watches STATE.
+
+Every PR in a request is reviewed on its own. Its state files are keyed by the
+message's Slack ts for the first PR, and `<ts>~2`, `<ts>~3`, … for the others. A
+request with more than one PR gets one "reviewing..." and then one reply per PR, each
+starting with the PR's `<repo>#<number>` (kept in `<key>.label`).
 
     loop.py
 """
@@ -87,6 +92,16 @@ def forget(ts, keep):
         path.unlink()
 
     (STATE / f"{ts}.{keep}").touch()
+
+
+def thread_of(key):
+    return key.split("~")[0]
+
+
+def labeled(key, text):
+    label = read(STATE / f"{key}.label")
+
+    return f"{label}: {text}" if label else text
 
 
 def queue_reply(ts, text):
@@ -180,7 +195,7 @@ class Pass:
                 continue
 
             if REPLIES[outcome]:
-                queue_reply(ts, REPLIES[outcome])
+                queue_reply(thread_of(ts), labeled(ts, REPLIES[outcome]))
 
             self.notes.append(f"{outcome} {url}")
 
@@ -214,7 +229,7 @@ class Pass:
             if kind in ("due", "final"):
                 rereviews.append((ts, rest[1], ["approve"] if kind == "final" else []))
             elif kind == "approved":
-                queue_reply(ts, "approved the new changes to unblock you 🚀")
+                queue_reply(thread_of(ts), labeled(ts, "approved the new changes to unblock you 🚀"))
                 self.notes.append(line)
             elif kind == "recovered":
                 self.alerts.append(f"review process gone, it will be retried: {rest[0]}")
@@ -223,8 +238,9 @@ class Pass:
 
         return rereviews
 
-    def start(self, ts, url, flag):
-        """Starts a review. False when it could not, and the request should wait."""
+    def start(self, ts, url, flag, ack, label=""):
+        """Starts a review of the PR keyed `ts`, replying `ack` in its thread first (unless
+        it is a retry). False when it could not, and the request should wait."""
         owner, repo, _ = PR_URL.match(url).groups()
 
         pr = gh("pr", "view", url, "--json", "state,headRefOid")
@@ -257,8 +273,11 @@ class Pass:
         retry = STATE / f"{ts}.retry"
         if retry.exists():
             retry.unlink()
-        else:
-            queue_reply(ts, "reviewing...")
+        elif ack:
+            queue_reply(thread_of(ts), ack)
+
+        if label:
+            (STATE / f"{ts}.label").write_text(f"{label}\n")
 
         (STATE / f"{ts}.url").write_text(f"{url}\n")
         (STATE / f"{ts}.head").write_text(f"{info['headRefOid']}\n")
@@ -310,27 +329,32 @@ class Pass:
 
         requests = []
         for message in sorted(reply["messages"], key=lambda m: float(m["ts"])):
-            urls = [m.group(0) for u in message["pr_urls"] if (m := PR_URL.match(u))]
-            if message["user"] == me or not urls or any(STATE.glob(f"{message['ts']}.*")):
+            urls = list(dict.fromkeys(m.group(0) for u in message["pr_urls"] if (m := PR_URL.match(u))))
+            if message["user"] == me or not urls:
                 continue
 
-            requests.append((message["ts"], urls))
+            ts = message["ts"]
+            keys = [ts] + [f"{ts}~{n}" for n in range(2, len(urls) + 1)]
+            todo = [(key, url) for key, url in zip(keys, urls) if not any(STATE.glob(f"{key}.*"))]
+            if todo:
+                requests.append((len(todo) == len(urls), len(urls) > 1, todo))
 
         slots = MAX_RUNNING - len(list(STATE.glob("*.tmp")))
         waiting = 0
-        for ts, urls in requests:
-            if slots <= 0 or not self.start(ts, urls[0], []):
-                waiting += 1
-                continue
+        for fresh, several, todo in requests:
+            ack = "reviewing..." if fresh else None
+            for key, url in todo:
+                label = "{1}#{2}".format(*PR_URL.match(url).groups()) if several else ""
+                if slots <= 0 or not self.start(key, url, [], ack, label):
+                    waiting += 1
+                    continue
 
-            if (STATE / f"{ts}.url").exists():
-                slots -= 1
-
-            if urls[1:]:
-                self.alerts.append(f"request {urls[0]} also named {', '.join(urls[1:])}, not reviewed")
+                if (STATE / f"{key}.url").exists():
+                    slots -= 1
+                    ack = None
 
         for ts, url, flag in rereviews:
-            if slots > 0 and self.start(ts, url, flag) and (STATE / f"{ts}.url").exists():
+            if slots > 0 and self.start(ts, url, flag, labeled(ts, "reviewing...")) and (STATE / f"{ts}.url").exists():
                 slots -= 1
 
         if waiting:

@@ -18,6 +18,9 @@ due once it is still the head after the grace period. A newer push restarts the 
 After the last allowed review a new head is approved right away, unless the PR is a
 draft or the user's own, which GitHub refuses to approve.
 
+`<ts>` is the request's Slack ts, with `~<n>` added for the n-th PR of a request that
+named more than one.
+
 `<ts>.done` and `<ts>.skipped` markers older than `since` are deleted: the channel is
 only read from `since` on, so nothing needs them.
 
@@ -52,7 +55,7 @@ def prune(state):
         return
 
     for path in [*state.glob("*.done"), *state.glob("*.skipped")]:
-        if float(path.stem) < float(since):
+        if float(path.stem.split("~")[0]) < float(since):
             path.unlink()
 
 
