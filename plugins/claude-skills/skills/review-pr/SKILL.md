@@ -63,6 +63,26 @@ Record `PRIOR`: your comments, each with the author's replies in its thread (a r
 `in_reply_to_id` is the thread's first comment), plus the **Outside this PR's diff**
 entries in your review bodies. It is empty on a first review.
 
+## Step 2b — Find the local clone
+
+The review needs a local clone of `OWNER/REPO`. `CLONE` is the first of these where
+`gh repo view --json nameWithOwner --jq .nameWithOwner`, run inside it, equals
+`OWNER/REPO` (case-insensitive):
+
+1. The current directory.
+2. `<REPOS_DIR>/<REPO>`, where `REPOS_DIR` is `echo "${REVIEW_REQUESTS_REPOS_DIR:-$HOME/repos}"`.
+   If it does not exist, `gh repo clone <OWNER>/<REPO> "<REPOS_DIR>/<REPO>"` and tell the
+   user it was cloned.
+
+Neither matches, or the clone failed → stop and tell the user why, naming both paths.
+Never delete or overwrite an existing directory.
+
+The shell's working directory resets between calls when `CLONE` is outside the session's
+working directory, so never rely on a `cd` from an earlier call. Every command that
+`code-review` Step 2b runs in the repo — the same-repo check, `git fetch`,
+`git worktree add`, and the step 6 cleanup — runs as `cd "<CLONE>" && …` in a single Bash
+call.
+
 ## Step 3 — Run the code review
 
 Read `../code-review/SKILL.md` (resolve it from this file's own location; do not
