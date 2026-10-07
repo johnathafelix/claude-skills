@@ -60,18 +60,18 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
 | `tdd` | Test-driven development (red-green-refactor) |
-| `test-check` | Check the tests behind a branch's changes — coverage of new/modified lines (≥80%), assertions that prove what the test name claims, assertion strictness (`mock.Anything` last resort), DB operations covered by real-engine integration tests, mock expectations asserted both ways. One read-only opus agent per guideline via the Workflow tool, then an adversarial opus verifier per finding. Report only — never edits |
-| `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
-| `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, redundant-variable inlining) on changed files — dispatches via the Workflow tool, one agent per guideline (falls back to a direct fan-out if Workflow is unavailable) — pinned to opus |
+| `test-check` | Check the tests behind a branch's changes — coverage of new/modified lines (≥80%), assertions that prove what the test name claims, assertion strictness (`mock.Anything` last resort), DB operations covered by real-engine integration tests, mock expectations asserted both ways. Two related read-only opus guideline groups, then bounded adversarial batches of up to four claims. Report only — never edits |
+| `golang-check` | Check Go code against Go conventions — dispatches via the Workflow tool, related guideline groups with shared source reads (bounded direct groups if Workflow is unavailable) — pinned to opus |
+| `ts-check` | Run all TypeScript quality checks (strong types, no magic values, data over logic, object parameters, redundant-variable inlining) on changed files — dispatches via the Workflow tool, related guideline groups with shared source reads (bounded direct groups if Workflow is unavailable) — pinned to opus |
 | `check-rest-api-design` | Review a REST/HTTP API against design best practices |
 | `humanizer` | Remove signs of AI-generated writing; make text sound human, direct, and concise (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
 | `simplify-code` | Dispatch the `code-simplifier` agent to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
-| `code-review` | Report-only code review: 15 finder angles (bugs, error handling, type invariants, security, tests, comment accuracy, cleanup, CLAUDE.md conventions) plus a gap sweep, every finding verified by an adversarial agent, all on opus. Each finding is marked `issue` or `nit`. Reviews your branch's changes by default, or a teammate's PR given its URL (checked out in a temporary worktree). Takes an effort level, default `high`. Invoke as `/claude-skills:code-review` — the bare `/code-review` is Claude Code's built-in. `ship-task` and `address-pr-review-comments` run the same review |
+| `code-review` | Report-only opus review: fast/standard grouped passes; thorough retains 15 angles plus a sweep. Independent verification batches four claims, capped at eight calls; missing verdicts remain explicit gaps. Each finding is marked `issue` or `nit`. Reviews your branch's changes by default, or a teammate's PR given its URL (checked out in a temporary worktree). Takes a profile (default `standard`) and effort (default `medium`; thorough `high`). Invoke as `/claude-skills:code-review` — the bare `/code-review` is Claude Code's built-in. `ship-task` and `address-pr-review-comments` run the same review |
 | `review-pr` | Review a teammate's PR end to end: runs the `code-review` workflow on it, plus `golang-check` / `ts-check` for its language (findings verified by the same adversarial reviewer) and `test-check` (installs deps with yarn or npm if missing, then runs the PR's suite in the worktree for coverage), posts every finding as an inline comment, rewritten by `humanizer` to read less machine-made (findings outside the diff go in the review body), and approves when there are no findings or only nits — otherwise posts a non-blocking comment review. On a re-review it skips findings it already reported, and won't approve while one of those issues is still in the code, unless the author replied declining it. Posts without a confirmation step; never approves a draft, your own PR, a head that moved mid-review, or a review where an angle or check failed to run (coverage not measured is reported but doesn't block). With `approve` it posts its comments and approves whatever it finds (still never a draft, your own PR or a moved head). Effort defaults to `high`; set `REVIEW_PR_EFFORT` in your `~/.claude/settings.json` `env` to change the default (an explicit effort argument still wins). Runs from a checkout of the PR's repo, or else uses (cloning if missing) `<REVIEW_REQUESTS_REPOS_DIR>/<repo>` (default `~/repos`). Invoke as `/claude-skills:review-pr <PR URL> [effort] [approve]` |
 | `review-requests` | Watch a Slack channel for teammates' PR review requests: replies "reviewing..." in the thread, runs `review-pr` in its own headless session for each PR in the message (at most 2 at a time; with several PRs, each reply names its PR), then replies "left some comments", "approved! 🚀", …. Keeps watching each reviewed PR: re-reviews it once a new push has sat for 10 minutes, up to 2 reviews per PR. The 2nd review always approves, so a teammate isn't blocked by picky re-reviews, and every later push is approved right away with no review (no AI cost). Stops watching when the PR is merged or closed. State lives in `~/.claude/review-requests`, so a restarted session carries on, including requests posted while it was closed. Runs as a background Python loop that reaches Slack through short headless sessions (haiku, Slack tools only), so the session that started it does not grow while it watches; one line per pass goes to `~/.claude/review-requests/log`. Uses the Slack connector already in Claude Code and stops if it is not connected. Picks up only messages posted after the watch started. Needs `REVIEW_REQUESTS_CHANNEL_ID` (and, recommended, `REVIEW_REQUESTS_USER_ID`) in your `~/.claude/settings.json` `env`. Run once as `/claude-skills:review-requests`; it repeats every 5 minutes while the session is open (`REVIEW_REQUESTS_INTERVAL_MINUTES` changes the interval) |
-| `ship-task` | Ship one task end to end: `lead-orchestrator` plans/implements via `planner` (fable) and `fast-worker` (sonnet) — the main session runs it in the background and polls it for status so long waves don't leave it stalled — then a dedicated opus code review runs, `planner` (fable) drafts a fix plan the user approves, `fast-worker` applies it, `deep-reasoner` verifies, and the result is committed with a draft PR |
+| `ship-task` | Ship an approved task with fast, standard or thorough execution, task-only manifests, grouped quality checks, bounded in-scope remediation and evidence reuse. Cleanup runs before review/verification; commit and draft PR creation use a prepared description once |
 | `address-pr-review-comments` | Address a PR's review comments, verification first: a fable verifier checks each comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
 
 ### Hooks
@@ -154,3 +154,28 @@ If you already wire these hooks manually in `~/.claude/settings.json` (pointing 
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Shipping cost and validation
+
+`ship-task` selects a profile by task risk. The default standard review covers the
+existing angles in three related passes; thorough keeps individual reviewers and a
+sweep. Go source checks ordinarily use three groups (plus testing when scoped),
+TypeScript two, and test quality two. Reviewer models remain opus. Each rule still
+has its own scope and proof anchors; failed rules retry once without repeating their
+successful siblings. Independent challengers share source context across four claims,
+with at most eight calls and four agents active. Overflow and missing verdicts remain
+visible, and downstream PR workflows do not post them as confirmed findings.
+
+The task manifest helper stores a baseline and patches outside the repo, including
+new/deleted files and edits within pre-existing dirty files. It does not stage changes.
+Coverage/test evidence needs matching inputs rather than a recent timestamp. Workers'
+passing commands can be reused when those inputs remain unchanged.
+
+These changes target the observed local-session overhead: the four October 6 Go runs
+used 48–63 agents, and review/quality checks accounted for about 51% of newly supplied
+input/cache-write tokens. This is a baseline observation, not a measurement of the new
+pipeline or a dollar estimate. Re-run representative tasks after plugin reload and
+compare total elapsed time excluding approval waits, actual agent calls, all-request
+usage, and independently confirmed defects. Local tests exercise grouping, retry
+isolation, verification budgets/failures and task ownership; they cannot establish
+live model recall or an actual token/time reduction.

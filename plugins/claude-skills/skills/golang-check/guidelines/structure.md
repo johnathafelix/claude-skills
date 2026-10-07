@@ -19,7 +19,7 @@ Extended examples (consult only for an ambiguous case): `../references/structure
 
 ### Function & file organisation
 - Within a file, declarations badly out of conventional order: types/consts/vars → constructor (`New...`) → exported methods (grouped by receiver) → unexported methods → utilities; roughly caller-before-callee. Flag a constructor placed after the methods it builds, or exported/unexported methods interleaved randomly. Low-to-medium confidence — only when clearly disorganised.
-- Source file **not kebab-case** (`userService.go`, `user_service.go` → `user-service.go`).
+- Source filenames violating an explicit project convention. Kebab-case is not a Go requirement; snake_case and standard `_test.go` / platform suffixes are valid. Do not flag a filename solely for your preferred style.
 - A single feature **scattered across many files** or many unrelated types crammed into one file (judgement call — only when obvious).
 
 ### Backward-incompatible changes

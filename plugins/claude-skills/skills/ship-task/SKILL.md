@@ -1,404 +1,199 @@
 ---
 name: ship-task
-description: Ship one task end to end using the existing agent team — planner (fable) drafts a plan that the skill gates with the user via the interactive plan-approval dialog, lead-orchestrator (opus) implements it via fast-worker (sonnet) and deep-reasoner (opus), then a dedicated high/opus code review runs, planner (fable) drafts a fix plan the user approves, fast-worker applies it, deep-reasoner verifies, and the result is committed with a draft PR and description. Run it from plan mode. REQUIRES a task description. Use when the user invokes /ship-task.
-argument-hint: "[what you want shipped]"
+description: "Implement an approved task, run scoped quality checks and independent review, fix in-scope issues, verify, commit and open a draft PR. Chooses fast, standard or thorough execution based on risk. Use when the user invokes /ship-task with a task description."
+argument-hint: "[fast|standard|thorough] [what you want shipped]"
 ---
 
 # Ship Task
 
-Take a task from description to an open, described PR through the existing agent team:
-`planner` (fable) drafts the plan and YOU gate it with the user; `lead-orchestrator`
-(opus) implements it via `fast-worker` (sonnet) and `deep-reasoner` (opus); a dedicated
-code review runs at high effort on opus; `planner` drafts a fix plan and YOU
-gate it; `fast-worker` applies it; `deep-reasoner` verifies; then `/git-commit` →
-`/draft-pr` → `/update-pr-description` ship it; `/compact-comments` runs last.
+Request: **$ARGUMENTS**
 
-**This skill spans many turns** — your own plan-approval dialog in Phase 1, and a
-backgrounded `Workflow` review in Phase 2. On any resume, re-read the plan files under
-`.claude/plans/` referenced below rather than trusting what's still in context.
+If empty, ask for the task and stop. This invocation authorizes the shipping pipeline;
+respect any narrower user instruction (for example, prepare only, no push).
+The main thread owns approval and completion. Never finish merely because an Agent or
+Workflow dispatch returned a task ID. Wait for its result and inspect coverage gaps.
 
-**The approval gate is yours, not the planner's.** Subagents have no `ExitPlanMode` tool:
-the harness discards `permissionMode` from plugin agent frontmatter, and it only grants
-`ExitPlanMode` to an agent whose own definition declares plan mode. So `planner` returns
-plan *text* and you present it. Do not delegate the gate downward — it will silently
-degrade into "here is a plan, pending approval" with nothing gating it.
+## 1. Preflight and choose a profile
 
-**This skill's phases supersede the harness's generic plan-mode workflow reminder.** Do
-not run its Explore/Plan phases and do not call `ExitPlanMode` with a plan of your own —
-the plan comes from `claude-skills:planner`.
+Read applicable project instructions. Record branch, HEAD and `git status --porcelain`.
+Keep pre-existing changes separate from this task, including already staged hunks.
+Resolve the PR base with `gh pr view --json baseRefName --jq '.baseRefName'`; otherwise
+use the originating main/master branch, or the repo's default branch. Fetch that base
+once; retain its resolved SHA for any branch comparison during this run.
 
-## The request
+On main/master, create a feature branch. For a Linear ticket use its `gitBranchName`
+when available; otherwise derive `<type>/<3-6-word-slug>`. Never silently switch to an
+existing branch with unrelated work. Report the selected branch briefly.
 
-The request is: **$ARGUMENTS**
+Honor an explicit profile. Otherwise select and state:
 
-If the request above is empty, ask the user what they want shipped and STOP.
+| Profile | Suitable task | Implementation | Review |
+|---|---|---|---|
+| fast | Small, clear change with a known verification command; no concurrency, auth, data migration or public contract risk | Main thread or one sonnet fast-worker | Two grouped opus passes, medium effort |
+| standard | Ordinary feature or fix, possibly across several files | One fable planner; main thread coordinates sonnet workers | Three grouped opus passes, medium effort |
+| thorough | Concurrency, security, migration, subtle shared invariants, broad API change, or explicit request | Planner plus sonnet lead; opus for difficult reasoning | Individual angles plus sweep, high effort |
 
-## Phase 0 — Preflight
+Fast still checks the applicable language and tests and independently challenges
+findings. Escalate the profile when investigation reveals a material risk; explain why.
+A profile is a depth choice, not a claim that omitted angles ran.
 
-1. `git branch --show-current`. If `main` or `master`, create a feature branch before
-   anything else — `/draft-pr` in Phase 6 refuses to run from either, and finding that
-   out after the whole pipeline runs would waste it. Pick the name:
-   - **Linear ticket in the request** (an issue ID like `ENG-123` or a `linear.app/.../issue/...`
-     URL): load `mcp__claude_ai_Linear__get_issue` via `ToolSearch`, fetch the issue, and
-     use its `gitBranchName` verbatim.
-   - **Otherwise**, or if the Linear lookup fails or returns no `gitBranchName`: derive
-     `<type>/<slug>` from the request — `<type>` is the conventional-commit type that
-     fits (`feat`, `fix`, `refactor`, `chore`, `docs`, …), `<slug>` is 3–6 lowercase
-     kebab-case words capturing the task (e.g. `feat/add-csv-export-to-reports`).
+## 2. Plan and approval
 
-   Run `git switch -c <name>` (uncommitted changes carry over). If the branch already
-   exists: for a Linear name, `git switch <name>` — it is the same ticket's branch; for a
-   derived name, append `-2`, `-3`, … until it is free. Tell the user the branch name in
-   one line. Creating the branch is allowed in plan mode — it changes no file contents.
-   Remember the branch you started on (`main` or `master`) as `ORIGIN_BRANCH`.
-2. `git status --porcelain` to snapshot pre-existing dirty files, for context if later
-   diffs need to be attributed.
-3. Determine `BASE_BRANCH`: `gh pr view --json baseRefName --jq '.baseRefName'`; if that
-   fails (no PR yet), use `ORIGIN_BRANCH` when step 1 created the branch, else `main`.
-4. Check the permission mode. Phase 1's gate is `ExitPlanMode`, which the harness rejects
-   unless the session is in plan mode — so this skill is meant to be invoked **from plan
-   mode**. If it is not, call `EnterPlanMode` (main-thread only; it throws in agent
-   contexts) before Phase 1b. If that is unavailable or the user declines, fall back to
-   the `AskUserQuestion` gate described in Phase 1f and say plainly that the richer
-   approval dialog was unavailable. Never skip the gate because the tool was missing —
-   that is the exact failure this design exists to prevent.
+For fast, draft a short plan yourself. For standard/thorough, call
+`claude-skills:planner` (`model: "fable"`, `run_in_background: false`) once with the
+request, repo, profile, baseline dirt and intended scope. Ask for a concise plan with
+exact files, implementation tasks, verification commands and material risks. Thorough
+can use detailed waves. Do not demand architecture boilerplate for a local edit.
 
-## Phase 1 — Plan, gate, implement
+Include this authorization in the initial plan:
 
-Do not research, plan, or implement anything yourself. You draft through `planner`, own
-the approval dialog, and implement through `lead-orchestrator`.
+> After implementation, fix independently confirmed issues that prevent this task
+> from meeting its approved behavior, within the same scope. Allow one remediation
+> batch and one final correction. Nits are optional unless explicitly requested.
+> A new dependency, behavior change beyond the request, destructive action or scope
+> expansion requires a revised decision from the user.
 
-**1a — Draft.** Spawn `claude-skills:planner` with `model: "fable"` and
-`run_in_background: false`. Subagents see nothing of this conversation, so the prompt must
-be self-contained: the request verbatim, the current working directory, and `BASE_BRANCH`.
-It returns the complete plan document as text — there is no file to read.
+When the user already approved a concrete plan covering this work, reuse it and its
+actual authorization. Do not assume an older approval includes new scope or publishing.
+Otherwise the main thread presents the plan. In plan mode load `ExitPlanMode`, write
+the plan to the harness-designated plan file, then call it with no arguments. Subagents
+cannot own this gate. If unavailable, present the concrete plan and use AskUserQuestion,
+explaining the unavailable gate. On rejection incorporate the feedback and re-present.
 
-**1b — Gate.** `ExitPlanMode` is a deferred tool and it takes **no plan parameter** in
-this build: it reads the plan from the plan file the harness designates in the plan-mode
-system message. So, in order:
-
-1. `ToolSearch({ query: "select:ExitPlanMode", max_results: 1 })` to load its schema.
-2. Write the planner's returned document verbatim to that designated plan file. In plan
-   mode it is the one file you are allowed to write.
-3. Call `ExitPlanMode` with no arguments.
-
-The harness renders the approval dialog and owns the approve / auto-accept-edits /
-reject-with-feedback loop.
-
-**1c — Iterate.** On rejection with feedback, re-spawn `planner` with the previous plan
-plus the feedback verbatim, overwrite the same designated plan file, and call
-`ExitPlanMode` again. Repeat until approved. Rejection does not leave plan mode and the
-designated path is stable for the session, so this loop is safe to run as many times as
-the user wants. If the returned plan's first section is `## Open questions`, that is the
-planner asking — the user answers by choosing "No, keep planning" and typing answers,
-which reach you as rejection feedback.
-
-**1d — Save.** Only after approval, copy the approved plan into the project at
-`.claude/plans/<YYYY-MM-DD>-<slug>.md` (`date +%Y-%m-%d`; create the directory if needed).
-The order matters: before approval the only file you may write is the harness's designated
-plan file from 1b. Record this path — Phases 3 and 5 need it, and it is what the lead
-reads.
-
-**1e — Implement, polling the lead.** Spawn `claude-skills:lead-orchestrator` with
-`model: "opus"`, a `name` (use `lead`), and **in the background** (`run_in_background:
-true` — the `Agent` tool backgrounds by default). Background is required here: you are
-going to poll the lead, and a blocking `run_in_background: false` spawn would freeze this
-thread until the lead finished, leaving no turn in which to poll or to notice a stall.
-Phase 2 still gets the finished diff — you do not proceed to it until the poll loop below
-sees the lead signal completion.
-
-Self-contained prompt: the request verbatim, the current working directory, `BASE_BRANCH`,
-the approved plan path from 1d (state that the plan is already user-approved so its Phase 1
-is satisfied), and this instruction verbatim. Record the `agentId` the spawn returns:
-address polls to `lead` by name, and fall back to that id if a name-addressed
-`SendMessage` ever errors.
-
-> You run in the background and I will poll you with `STATUS POLL` messages — answer each
-> briefly and keep working. When you are fully done, `SendMessage` `main` your final report
-> beginning with the line `IMPLEMENTATION COMPLETE` (or `REPLAN NEEDED` on the re-plan
-> path). That message is what releases me.
-
-The lead owns everything through its own Phase 4: it executes the plan's waves via
-`fast-worker`/`deep-reasoner` (blocking on each wave with `run_in_background: false`), runs
-its own Phase 3 self-review, and verifies its success checklist.
-
-Then run this poll loop until the lead signals completion. Load the deferred tools first:
-`ToolSearch({ query: "select:Monitor,SendMessage,TaskStop", max_results: 3 })`. If the
-select does not return `TaskStop` (Task tools can be gated off by default on some models),
-run the loop anyway — just stop acting on ticks once the lead completes; a stray persistent
-heartbeat is harmless and ends with the session.
-
-1. **Arm the heartbeat** — one persistent `Monitor` that ticks on a fixed cadence:
-
-   ```
-   Monitor({ command: "while true; do sleep 150; echo tick; done", description: "ship-task lead poll heartbeat", persistent: true })
-   ```
-
-   A `Monitor` survives a forgotten re-arm, unlike a one-shot background `sleep`; one tick
-   every ~150s is well below Monitor's rate-limit auto-stop.
-
-   Each tick and each lead message is a separate turn, so the stall guard needs **durable
-   state**, not memory: keep a running log at `<scratchpad>/ship-task-poll-state.tsv` and
-   append to it on every tick and every lead message. Without this a future turn has nothing
-   to compare against and the guard silently never fires.
-
-2. **On each `tick`**, in one turn:
-   - Read ground truth. `git status --porcelain` is the guard's signal — it is fetch-free
-     and reliable here. `git diff --stat origin/$BASE_BRANCH` and
-     `git ls-files --others --exclude-standard` are for visibility only, and the diffstat may
-     be stale until Phase 2's `git fetch` runs, so do not key the guard on it.
-     ```bash
-     git status --porcelain
-     git ls-files --others --exclude-standard
-     git diff --stat origin/$BASE_BRANCH   # visibility only; may be stale pre-fetch
-     ```
-   - Append one row to the state file: `TICK<TAB><epoch><TAB>files=<count of porcelain lines>`.
-   - `SendMessage({ to: "lead", message: "STATUS POLL" })` — drives the lead forward if it
-     is idle, and queues harmlessly if it is blocked inside a wave.
-
-3. **On any message from the lead:** append `MSG<TAB><epoch><TAB><first line>` to the state
-   file, then: if it begins `IMPLEMENTATION COMPLETE`, the run is done — `TaskStop` the
-   heartbeat, record the files changed from that report, and go to **1g**. If it begins
-   `REPLAN NEEDED`, `TaskStop` the heartbeat and go to **1f**. Anything else is an interim
-   `STATUS:` line — keep polling. The lead's background task-completion notification is an
-   equivalent "done" signal: if it arrives, `TaskStop` the heartbeat, use the final
-   report the lead sent to `main`, and go to **1g**.
-
-4. **Stall guard.** Read the state file. Escalate to the user **only** when the last **three
-   `TICK` rows show an unchanged `files` count AND no `MSG` row falls after the third-from-
-   last `TICK`** — then `TaskStop` the heartbeat and report the stall plainly, quoting the
-   last status and the frozen file list. Never escalate on lead silence alone: silence
-   during a long wave is normal, which is why an intervening `MSG` row resets the guard.
-
-If the lead's final report flags an unresolved checklist item, do not treat that as fatal
-here — Phase 2's dedicated review independently re-examines the same diff regardless.
-
-**1f — Re-plan.** If the lead's message starts with `REPLAN NEEDED`, it stopped
-mid-flight because reality contradicted the plan. Print the revised plan document it
-returned to the user in full, then gate it with `AskUserQuestion`: *Approve revised plan*
-/ *Revise (type notes)* / *Abort pipeline*.
-
-This gate is `AskUserQuestion`, not `ExitPlanMode`: approval in 1b already took the
-session out of plan mode, so a second `ExitPlanMode` call would fail validation for the
-same reason this whole design exists. On approve, overwrite the plan file from 1d and
-re-spawn the lead with that path plus the lead's completed-work summary, using the same
-background-spawn and poll loop as 1e. On revise, hand the notes to `planner` and re-gate.
-Allow at most **two** re-plan rounds, then stop and report where it stalled.
-
-**1g — Quality checks + simplifier.** These are opt-in checks the harness no longer
-runs on its own, so this skill runs them explicitly — the language checks scoped to the
-language(s) the implementation actually touched, the test check over the whole change:
+After approval, save the plan in the session scratchpad (or use the already approved
+project plan). Keep run artifacts outside the repo. Resolve helper paths relative to
+this SKILL.md; never hardcode a home directory. Before any implementation edits:
 
 ```bash
-git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
-git ls-files --others --exclude-standard
+node "<plugin>/scripts/task-manifest.js" init "<repo>" "<scratchpad>/ship-task" "<base>" ".claude/plans"
 ```
 
-Dedupe into one changed-file list.
+The helper pins the initial HEAD and snapshots pre-existing dirty/untracked content.
+`manifest.json` contains only changes made since that baseline, including additions,
+deletions, modes and symlinks. Its per-file patches and changed ranges are the shared
+review scope. Do not reset the baseline after edits or commits. Unsupported submodules
+or an unavailable baseline must be handled explicitly, never silently excluded.
 
-1. If any file matches `*.ts` or `*.tsx` (excluding `*.d.ts`), run
-   `Skill({ skill: "claude-skills:ts-check", args: "<the matching files>" })`.
-2. If any file matches `*.go` (excluding `vendor/` and generated files), run
-   `Skill({ skill: "claude-skills:golang-check", args: "<the matching files>" })`.
-3. Skip whichever check has no matching files — do not run `ts-check` on a Go-only
-   change or `golang-check` on a TS-only one.
-4. Run `Skill({ skill: "claude-skills:test-check", args: "<the full changed-file list>" })`
-   once. It is not language-gated: it splits the given files into source and test files
-   and judges the tests behind the change (coverage of new lines, assertion fidelity and
-   strictness, DB integration, mock expectations). Pass the deduped list explicitly — its
-   own `git diff` scope would miss the untracked files the workers created, the same trap
-   Phase 2 guards against. Skip it only when the changed-file list contains no code at all
-   (docs/config-only change). When its notification arrives, keep its confirmed `findings`
-   as `TEST_FINDINGS` — Phase 3 plans fixes for them alongside the code-review findings.
-5. After whichever of the three ran, run
-   `Skill({ skill: "claude-skills:simplify-code", args: "<the full changed-file list>" })`
-   once. The simplifier is not language-gated, so run it even when no check matched.
+## 3. Implement, clean up, capture evidence
 
-All three checks report only — they do not edit. `ts-check`/`golang-check` findings are
-carried into the final message the same way Phase 2's `dimensionsUnverified` is carried;
-nothing in this step auto-fixes them. `test-check` findings are different: they are
-already independently verified, and each carries an `action`, so they are **acted on** —
-`TEST_FINDINGS` feeds Phase 3's fix plan and Phase 5 checks each one as fixed / not fixed.
-Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final message —
-a finding it dropped or could not verify is part of the report, not noise.
+Fast: implement directly or dispatch one `claude-skills:fast-worker` (sonnet).
+Standard: coordinate tasks directly; use workers only for distinct useful work packages.
+Thorough: dispatch `claude-skills:lead-orchestrator` with `model: "sonnet"`, approved plan,
+profile, manifest/helper locations and the watchdog instructions in `references/watchdog.md`.
+Use `run_in_background: true`; tell it explicitly to send `main` its completion report.
+Use opus deep-reasoner only for a difficult decision; a second opinion needs a concrete
+unresolved question. Disjoint files can run concurrently; dependent tasks run in order.
 
-## Phase 2 — Code review (nested `Workflow`, high + opus)
+Pass workers the relevant plan section, files, conventions and verification command.
+Require a concise report: changed files, command/results, relevant input hashes,
+deviations and unresolved issues. Cap correction of an off-plan worker at one attempt;
+if unresolved, report the blocker rather than spawning an indefinite loop.
 
-Scout the diff inline first — the workflow script has no filesystem access. Union
-tracked changes with untracked new files, the same trap `lead-orchestrator`'s own Phase 3
-already accounts for ("plus untracked files the workers created"). On the common "add a
-new module" case most of the new code is still untracked, so `--diff-filter=ACM` alone
-would miss it and silently review the wrong subset:
+Perform one integration/conformance pass at worker boundaries. The lead does not also
+run the full review pipeline. Reuse passing worker verification only when the command,
+configuration, dependency inputs and relevant files still match. An unchanged task diff
+alone does not prove a test is current if other inputs changed.
+
+Run simplification once when the implementation has non-trivial new logic, confined
+to task patches. Skip it for docs, formatting and already simple edits. Then run
+`/compact-comments` on task-added comments, passing the manifest path; preserve its
+exemptions. These are editing passes, so they happen **before** review and verification.
+Do not repeat them after shipping. Refresh after edits:
 
 ```bash
-git fetch origin $BASE_BRANCH
-git diff origin/$BASE_BRANCH --name-only --diff-filter=ACM
-git ls-files --others --exclude-standard
+node "<plugin>/scripts/task-manifest.js" refresh "<scratchpad>/ship-task"
 ```
 
-Dedupe the two lists into one `files` array.
+## 4. Scoped checks and independent review
 
-If that combined list is empty, log that there is nothing to review and skip to Phase 5.
+Use the manifest's paths and patches, not a fresh branch-wide file discovery. Deleted
+files remain in review scope; language checkers inspect surviving code and callers.
+Exclude generated/vendor files from language checks and list relevant exclusions.
 
-Otherwise dispatch the `code-review` skill's `workflow.js` — the same reviewer
-`/claude-skills:code-review` runs, which this skill reuses rather than carrying a copy.
-Stage it somewhere `Workflow` will accept first.
+Run applicable `golang-check` / `ts-check` and `test-check`, passing
+`changeManifestPath`, explicit file lists, profile and baseline. Stage checker scripts
+with `scripts/stage-workflow.js`; it inlines the shared runtime and guideline anchors.
+Use `mode: "grouped"` normally; thorough can request `"individual"`.
+Go retains per-rule file scopes and per-module Go-version gates. Do not read guideline
+bodies into the coordinator context; checker agents read their short checklists.
 
-`Workflow` rejects a `scriptPath` it did not itself return unless the file sits under the
-working directory or a directory added to the session. When this skill is installed as a
-plugin its `workflow.js` lives under `~/.claude/plugins/cache/...`, which is neither, so
-passing that path directly fails with *"scriptPath must be a script path this tool
-returned, or a file you can already read"*. Copy it into the session scratchpad
-directory (the absolute path is given in your environment) and dispatch from there,
-normalizing the source to an absolute path rather than leaving `..` for the runtime:
+Tests own measured coverage, assertion fidelity/strictness, DB integration and mock
+expectations. Obtain coverage with the planned test command where applicable; reuse
+it only with matching command/configuration and a matching repository snapshot.
+Do not generate a second whole-suite coverage run if valid evidence already exists.
+Unavailable coverage is UNVERIFIED with a reason, never a clean pass.
+For this pipeline, run test-check with `verify: false`; these are **candidates**, handed
+to the following independent review together with language findings. Standalone
+test-check retains independent verification. Attach guideline paths, coverage path,
+original rule/severity, and a precise `suggestedFix` (test `action`) to candidates.
+Map concrete correctness/regression issues to `issue`; convention/style suggestions
+are `nit`. The challenger may raise severity, never lower an issue.
 
-```bash
-cp "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
+Copy `code-review/workflow.js` into the scratchpad, then dispatch:
+
+```text
+Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: {
+  files: <all task paths>, baseBranch: <base>, profile: <selected profile>,
+  changeNote: <one-line intent>, planPath: <approved plan>,
+  changeManifestPath: "<scratchpad>/ship-task/manifest.json",
+  externalFindings: <language and test candidates>,
+  coveredDimensions: <["tests"] only if test-check and measured coverage completed; else []>
+}})
 ```
 
-Do **not** copy it into the user's repo instead: an untracked file there would be picked
-up by the diff scouting above and reviewed as if it were part of the change. If the
-session declares no scratchpad directory, read `workflow.js` in full and pass its
-contents as `script` instead of `scriptPath` — that path has no directory dependency at
-all, at the cost of ~3k tokens in this context.
+The script deduplicates equivalent claims before challenging them, preserves distinct
+issues at one location, batches up to four claims per independent verifier, and caps
+verification at eight calls with at most four agents in flight. Thorough adds a sweep.
+Missing/malformed verdicts and budget overflow remain explicitly unchallenged. Do not
+fix them as confirmed, count them as clean, or start unbounded retries. Report the gap
+and request a targeted decision only if shipping cannot proceed without resolving it.
 
-```
-Workflow({
-  scriptPath: "<scratchpad>/code-review-workflow.js",
-  args: { files: <the diff list>, baseBranch: BASE_BRANCH, effort: "high", changeNote: "<one-line summary of the lead's Outcome>", planPath: "<Phase 1 plan path>" },
-})
-```
+Keep full results in the scratchpad; carry counts and actionable issues in context.
+Language/test UNVERIFIED rules, review dimensionsUnverified, dimensionsSkipped,
+refuted and unchallenged entries must remain visible in the eventual report.
 
-Resolve `<absolute dir of this SKILL.md>` relative to this file's own location — do not
-hardcode a home directory; the skill may run from `~/.claude/plugins/cache/...`. Pass
-`args` as a real JSON object, not a JSON-encoded string.
+## 5. Bounded remediation and final verification
 
-**Dispatching is not finishing.** `Workflow` returns a task ID immediately and the run
-completes in the background — do not close the turn on that ID. Wait for the completion
-notification, then read its `{ findings, findingCount, dimensionsUnverified }`. If
-`dimensionsUnverified` is non-empty, say so plainly when you eventually report to the
-user — an unverified dimension is not the same as a clean pass on it.
+For independently confirmed **issues**, apply the plan's authorized remediation in
+one batch. Main thread or fast-worker can use a short action list; do not commission
+another comprehensive plan or ask again for routine fixes already approved. A truly
+new scope/behavior decision goes to the user with the concrete proposed change.
+Nits do not block shipping unless the user requested them.
 
-If `findingCount` is 0 **and** `TEST_FINDINGS` from 1g is empty, log that the review was
-clean and skip to Phase 5. If either list is non-empty, continue to Phase 3 with whichever
-lists have entries — a clean code review does not skip the test fixes, and vice versa.
+Refresh the manifest after remediation. Recheck only changed rules/areas and affected
+commands; preserve still-valid results for unchanged inputs. Independently verify the
+actual fixes together in one focused pass where inspection adds value. Do not spawn
+one verifier per checklist item. Allow one final correction, then rerun the commands
+it invalidates, and inspect the corrected hunks before marking them reviewed.
+Persistent issues or required verification failures stop shipping.
 
-## Phase 3 — Fix plan (`planner`, fable, user-approved)
+Record evidence outside the repo: each command, exit status, output path, relevant
+files/configuration/dependency inputs, repositorySnapshot and review manifest revision.
+A conservative whole-repository fingerprint is available via `task-manifest.js snapshot`;
+use it if the relevant-input dependency set is uncertain. Never reuse coverage/tests
+based only on report modification time or last commit time. Explicitly report tests
+that could not run. Do not repeat passed commands without changed inputs or new concern.
 
-Spawn `claude-skills:planner` with `model: "fable"` and `run_in_background: false`.
-Subagents see nothing of this conversation, so the prompt must be self-contained: the
-confirmed findings from Phase 2 (file, line, description, suggestedFix, dimension),
-`TEST_FINDINGS` from 1g (file, line–endLine, rule, description, rationale, action — the
-`action` is the fix to plan; for `coverage` findings it names the uncovered ranges to
-write tests for), the Phase 1 plan path for context on intended behavior, the current
-working directory, and `BASE_BRANCH`. State explicitly that **the plan must be scoped to
-these findings only** — no adjacent refactors, no drive-by improvements. It returns its
-standard plan document, whose wave-based task breakdown Phase 4 executes.
+## 6. Commit and open the draft PR
 
-Test fixes must satisfy the guideline that raised them, not just silence it — put this in
-the prompt: a `db-integration` finding is fixed by a test against a real engine (reuse the
-repo's existing harness if the finding names one), an `assertion-strictness` finding by
-the actual value or a typed matcher, a `mock-expectations` finding by asserting both
-halves, a `coverage` finding by tests that exercise the named ranges with real assertions.
+Confirm the final manifest revision matches the reviewed patch and verification
+inputs. With zero task changes, report that fact and stop without creating a commit.
+Resolve any remaining required gaps before shipping; user-approved exceptions must be
+explicit in the report and PR. Prepare the PR body once: behavior, key change, validation
+and material limits. Save it as `<scratchpad>/ship-task/pr-body.md`.
 
-`planner` is read-only and will not write files itself — write its returned document
-verbatim to `.claude/plans/<YYYY-MM-DD>-<slug>-fixes.md` yourself.
+Invoke `/git-commit` with the manifest-owned paths and this restriction: stage task
+changes only; preserve pre-existing staged/unstaged work. Never use blanket `git add`.
+A baselineDirty path contains mixed ownership: use a reviewed task-only hunk staging
+method that preserves the existing index, or obtain a concrete decision on the overlap.
+Do not automatically include the whole dirty file. Confirm the staged diff contains
+only task hunks before committing. Do not modify source after final verification.
 
-**Gate it.** Print the fixes plan in full, followed by the findings it covers (file:line,
-dimension, description), so the user can check it does not diverge from what the review
-found. Then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes)* / *Skip
-fixes*. This is `AskUserQuestion`, not `ExitPlanMode`, for the same reason as 1f.
+Invoke `/draft-pr` with the base and the prepared body file. It pushes and creates or
+updates the draft once; skip `/update-pr-description` when the body was already supplied.
+Respect the session's existing publishing authorization and any prepare-only constraint.
 
-- **Approve** — continue to Phase 4.
-- **Revise** — re-spawn `planner` with the previous plan plus the user's notes verbatim,
-  overwrite the same fixes file, and gate again. If the plan's first section is
-  `## Open questions`, that is the planner asking: put the questions to the user and
-  pass the answers back the same way.
-- **Skip fixes** — apply nothing; go straight to Phase 5 and record every finding and
-  `TEST_FINDINGS` entry as *skipped by the user*.
-
-## Phase 4 — Apply fixes (`fast-worker` / `deep-reasoner`, per task)
-
-Execute the fixes plan's waves. **One wave = one message containing that wave's `Agent`
-calls, every one with `run_in_background: false`.** This is the wave barrier: multiple
-calls in one message give concurrency within the wave; `run_in_background: false` on
-each is what stops wave N+1 from dispatching before wave N's files exist (the `Agent`
-tool backgrounds by default). Cap at 5 concurrent, matching `lead-orchestrator`.
-
-Each task goes to the executor the plan marks: `fast-worker` with `model: "sonnet"`, or
-`deep-reasoner` with `model: "opus"` for reasoning-heavy fixes.
-
-```
-Agent({ subagent_type: "claude-skills:<executor>", model: "<sonnet|opus>", run_in_background: false, prompt: `
-Task: <task id and objective>
-Plan: read <absolute fixes-plan path>, task <T-n> applies to you
-Files: <exact paths to touch>
-Conventions: <style/idiom constraints from the plan>
-Done means: <verify command and expected result>
-Report: files changed, verification output, deviations
-` })
-```
-
-Supervise each result against the fixes plan — right files, verify command actually
-passed. On a contradiction, stop the wave and report rather than improvising a
-work-around.
-
-## Phase 5 — Final check (`deep-reasoner`, opus)
-
-Spawn `claude-skills:deep-reasoner` with `model: "opus"` and `run_in_background: false`,
-analysis only. Give it: both plan file paths (Phase 1's implementation plan and Phase
-3's fixes plan, if it exists), the confirmed findings list, `TEST_FINDINGS`, and
-`git diff origin/$BASE_BRANCH`. Ask for a per-item verdict, not a summary:
-
-- every implementation-plan task: done / partial / missing
-- every code-review finding: fixed / not fixed
-- every `test-check` finding: fixed / not fixed — "fixed" means the test now asserts or
-  covers what the finding's `action` asked for, not merely that a test was touched
-- every success-checklist item from Phase 1: pass / fail, with evidence
-
-Findings the user skipped at the Phase 3 gate are not gaps: leave them out of the
-verdict list, the remediation pass, and the guard below.
-
-If it reports any gap, run exactly **one** remediation pass
-(`claude-skills:fast-worker`, `model: "sonnet"`, `run_in_background: false`) targeted at
-the specific gaps, then re-run this same check once more. Do not loop beyond that.
-
-**Guard:** if the second check still reports an item as outright **failed** (not
-partial) after the remediation pass, STOP here — do not proceed to Phase 6. Report to
-the user what failed and why, plainly, without committing broken work. A partial-but-
-improving item does not trigger this guard.
-
-## Phase 6 — Ship
-
-Strictly serial — each step depends on the previous one:
-
-1. `Skill({ skill: "claude-skills:git-commit", args: "<one-line hint summarizing the shipped change>" })`
-2. `Skill({ skill: "claude-skills:draft-pr" })`
-3. `Skill({ skill: "claude-skills:update-pr-description" })`
-
-`draft-pr` needs the commit pushed first; `update-pr-description` needs the PR to exist
-first.
-
-## Phase 7 — Compact comments
-
-Runs last, after the PR exists, so no later phase can re-inflate what it trims. Skip it
-if Phase 5's guard stopped the pipeline.
-
-1. `Skill({ skill: "claude-skills:compact-comments" })` — no args: it diffs against the
-   PR base itself, so its scope is every comment added in this PR.
-2. If its report lists edited files, `Skill({ skill: "claude-skills:git-commit", args:
-   "compact PR comments: <those files>" })` then `git push`. Pass exactly those files —
-   `git status --porcelain` would also list pre-existing dirty files from Phase 0 and any
-   untracked plan files, which this commit must not pick up. If it edited nothing, there
-   is nothing to ship.
-
-## Final message to the user
-
-Report: outcome, both plan file paths, files changed (implementation + fixes), 1g's
-`ts-check`/`golang-check` findings (or "clean"/"skipped, no matching files"), 1g's
-`test-check` findings and how each was resolved (plus its refuted/unchallenged/UNVERIFIED
-lists), the simplifier's summary, the code-review findings and how each was resolved (or
-"clean" / list any `dimensionsUnverified`), the Phase 3 gate's outcome (approved /
-revised / skipped — list skipped findings), the final check's per-item verdict, Phase 7's
-compact-comments report (with its follow-up commit SHA, if any), and the PR URL. If
-Phase 5's guard stopped the pipeline before Phase 6, say so plainly instead of the PR URL.
+Final report: outcome, PR URL (or prepared state), verification result, material gaps,
+profile, actual agent calls and phase durations from workflow stats. Do not estimate
+billed tokens from partial subagent notifications. Keep detailed evidence at the
+artifact paths; avoid repeating every clean check in prose.

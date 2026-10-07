@@ -17,7 +17,7 @@ Extended examples (consult only for an ambiguous case): `../references/errors.md
 - No match needed, dynamic msg → `fmt.Errorf("file %q missing", name)`.
 - Caller must match, static → exported `var ErrXxx = errors.New(...)`.
 - Caller must match, dynamic → custom error type with `Error()`, matched via `errors.As`.
-- Flag a sentinel returned bare without wrapping (caller forced into `==`); wrap so `errors.Is` works.
+- A bare sentinel works with `errors.Is`; wrapping is optional. Flag missing operation context only when it is needed to diagnose the failure, and use `%w` when callers must match the underlying error.
 
 ### Error strings
 - Flag capitalised error strings or trailing punctuation: `errors.New("Not found.")` → `errors.New("not found")`. They compose into chains.

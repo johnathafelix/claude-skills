@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high, or REVIEW_PR_EFFORT) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. With `approve` it posts its comments and approves whatever it finds. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer.
+description: "Review a teammate's GitHub PR end to end — runs the code-review workflow on it (15 opus finder angles, a gap sweep, adversarial verification; effort default high, or REVIEW_PR_EFFORT) plus golang-check / ts-check by language and test-check, posts every confirmed finding as an inline review comment, and approves the PR when there are no findings or only nits. On a re-review it skips findings it already reported, and never approves while one of those issues is still in the code, unless the author replied declining it. With `approve` it posts its comments and approves whatever it finds. Posts directly, with no confirmation step. Use when the user invokes /claude-skills:review-pr with a PR URL, or asks to review and approve a teammate's PR with this reviewer."
 argument-hint: "<PR URL> [low|medium|high|xhigh|max] [approve]"
 ---
 
@@ -87,14 +87,14 @@ call.
 
 Read `../code-review/SKILL.md` (resolve it from this file's own location; do not
 hardcode a home directory) and follow its **Steps 2b and 3** in PR mode with this URL and
-`EFFORT`: same-repo check, temporary worktree `$WT`, staged `workflow.js`, `Workflow`
+`EFFORT` and `PROFILE: thorough` (retain this skill's promised full review): same-repo check, temporary worktree `$WT`, staged `workflow.js`, `Workflow`
 dispatch. **Hold its cleanup (2b step 6)** until Steps 3b and 3c are done too — they
 need the worktree. Cleanup is still unconditional: run it before posting, even when
 something failed.
 
-Read `{ findings, findingCount, dimensionsUnverified }` from the completion
+Read `{ findings, findingCount, dimensionsUnverified, unchallenged }` from the completion
 notification. Each finding has `file`, `line`, `severity` (`issue` / `nit`),
-`dimension`, `description`, `suggestedFix`.
+`dimension`, `description`, `suggestedFix`. Post only `verified: true` findings; carry unchallenged candidates into the final report and approval coverage-gap decision.
 
 ## Step 3b — Language checks and test-check
 
@@ -145,10 +145,10 @@ Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js",
   args: { verifyOnly: [<normalized golang/ts findings>], files, baseBranch: BASE, effort: EFFORT, repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD" } })
 ```
 
-Keep only the findings it returns. Then run the worktree cleanup, and combine all three
-sets — code review, verified language checks, test-check — merging any that share
-`file:line`: one finding, every dimension listed, the higher severity, each source's text
-kept.
+Keep only returned findings with `verified: true`; report its `unchallenged` entries as coverage gaps, never as confirmed comments. Then run the worktree cleanup, and combine all three
+sets — code review, verified language checks, test-check — deduplicating equivalent
+claims on `file:line` plus the violated invariant. Preserve distinct defects on the
+same line; a shared location alone does not make two claims equivalent.
 
 ## Step 3d — Skip what you already reported
 

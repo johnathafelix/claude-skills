@@ -1,7 +1,7 @@
 ---
 name: code-review
-description: Review code changes and report findings — never plans or applies fixes. Runs 15 focused finder angles (line scan, removed behavior, cross-file callers, language pitfalls, wrappers, error handling, type invariants, security, tests, reuse, simplification, efficiency, altitude, comment accuracy, CLAUDE.md conventions) plus a gap sweep, every agent on opus, then verifies each finding with an adversarial opus agent. Reviews the current branch's changes against its PR base by default, or a teammate's GitHub PR when given its URL. Accepts an effort level (low / medium / high / xhigh / max, default high). Use when the user invokes /claude-skills:code-review or asks to review their changes or a PR with this reviewer.
-argument-hint: "[low|medium|high|xhigh|max] [PR URL]"
+description: "Review local changes or a GitHub PR with grouped opus finders and bounded independent challenge batches. Fast and standard profiles reduce fan-out; thorough uses all 15 angles plus a sweep. Reports findings and explicit coverage gaps; never edits or posts."
+argument-hint: "[fast|standard|thorough] [low|medium|high|xhigh|max] [PR URL]"
 ---
 
 # Code Review
@@ -22,11 +22,12 @@ notification, then report.
 
 Split the arguments on whitespace. Tokens may come in any order:
 
-- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `high`.
+- `fast`, `standard`, `thorough` → `PROFILE`. Default `standard`.
+- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `medium` for fast/standard, `high` for thorough.
 - A URL matching `https://github.com/<owner>/<repo>/pull/<number>` → PR mode, with
   `OWNER`, `REPO`, `PR_NUMBER`.
 - Anything else → stop and show usage:
-  `/claude-skills:code-review [low|medium|high|xhigh|max] [https://github.com/<owner>/<repo>/pull/<n>]`.
+  `/claude-skills:code-review [fast|standard|thorough] [low|medium|high|xhigh|max] [https://github.com/<owner>/<repo>/pull/<n>]`.
 
 The model is always opus; the effort sets how hard every agent thinks.
 
@@ -37,15 +38,15 @@ Review the current branch's changes, committed or not, against its PR base:
 ```bash
 BASE_BRANCH=$(gh pr view --json baseRefName --jq '.baseRefName' 2>/dev/null || echo main)
 git fetch origin "$BASE_BRANCH"
-git diff "origin/$BASE_BRANCH" --name-only --diff-filter=ACM
+git diff "origin/$BASE_BRANCH" --name-only --diff-filter=ACMD
 git ls-files --others --exclude-standard
 ```
 
 Dedupe the two lists into `files` — the union matters, because a brand-new file is
-untracked and `--diff-filter=ACM` alone misses it. If `files` is empty, report that there
+untracked and `--diff-filter=ACMD` alone misses it. If `files` is empty, report that there
 is nothing to review and stop.
 
-Workflow args: `{ files, baseBranch: BASE_BRANCH, effort: EFFORT }`.
+Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT }`.
 
 ## Step 2b — PR mode (URL given)
 
@@ -67,12 +68,12 @@ never touched.
 
    `pull/<n>/head` also covers PRs opened from forks. If the branch or worktree already
    exists from an earlier interrupted run, run the cleanup in step 6 first, then retry.
-4. **Files.** `git -C "$WT" diff --name-only --diff-filter=ACM "origin/$BASE...HEAD"`.
+4. **Files.** `git -C "$WT" diff --name-only --diff-filter=ACMD "origin/$BASE...HEAD"`.
    Three dots: only the PR's own changes, not what landed on the base since it branched.
    Empty → report nothing to review, clean up, and stop. If `STATE` is `MERGED`, say why:
    the PR's commits are already in `origin/<BASE>`, so there is no diff left to review.
 5. Workflow args:
-   `{ files, baseBranch: BASE, effort: EFFORT, repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD", changeNote: "PR #<n>: <TITLE>" }`
+   `{ files, baseBranch: BASE, profile: PROFILE, effort: EFFORT, repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD", changeNote: "PR #<n>: <TITLE>" }`
    with `<WT>` and `<BASE>` substituted.
 6. **Always clean up** once the workflow finishes — also when it failed or was stopped:
 
@@ -99,7 +100,7 @@ Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: <Step 2 arg
 ```
 
 Pass `args` as a real JSON object, not a JSON-encoded string. Wait for the completion
-notification, then read `{ findings, findingCount, dimensionsUnverified }`.
+notification, then read `{ findings, findingCount, dimensionsUnverified, unchallenged, refuted, dimensionsSkipped, stats }`.
 
 ## Step 4 — Report
 
@@ -114,13 +115,14 @@ N. `file:line` [dimension · severity]
    Fix:  <suggestedFix>
 ```
 
-In PR mode, paths are relative to the repo root, not to the worktree. A finding several
-angles confirmed on the same line arrives already merged: its dimension lists every angle,
-and each angle's description and fix are kept. `severity` is `issue` or `nit` (no effect on
+In PR mode, paths are relative to the repo root, not to the worktree. Equivalent claims are deduplicated before verification; distinct defects at the same
+line remain separate. Each finding carries its originating dimensions. `severity` is `issue` or `nit` (no effect on
 behavior or correctness); list issues before nits.
 
 If `dimensionsUnverified` is non-empty, list those angles under **Not verified** and say
-plainly that an unverified angle is not a clean pass. With zero findings and nothing
-unverified, say the review is clean.
+plainly that an unverified angle is not a clean pass. Always report `unchallenged` claims (including budget overflow), refutation counts and
+`dimensionsSkipped` for the selected profile. With zero findings and no gaps, say the
+review is clean for that profile, not for omitted dimensions. Workflow stats report
+actual finder/verifier call counts and duration.
 
 End there. Do not offer a fix plan or start fixing.

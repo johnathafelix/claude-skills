@@ -1,6 +1,6 @@
 ---
 name: compact-comments
-description: Triage every comment added in the current PR — delete the ones that only restate the code, compact the rest into succinct, objective 1-2 line comments that keep the essence. Use PROACTIVELY right after you add or expand comments in source files — pass the files you just edited. Also use whenever the user asks to shorten, tighten, or compact comments, to remove redundant or obvious comments, or invokes /compact-comments. Scope is comments ADDED in the current PR; widen to pre-existing comments only when the user explicitly asks.
+description: "Triage every comment added in the current PR — delete the ones that only restate the code, compact the rest into succinct, objective 1-2 line comments that keep the essence. Use PROACTIVELY right after you add or expand comments in source files — pass the files you just edited. Also use whenever the user asks to shorten, tighten, or compact comments, to remove redundant or obvious comments, or invokes /compact-comments. Scope is comments ADDED in the current PR; widen to pre-existing comments only when the user explicitly asks."
 allowed-tools: Bash, Read, Edit, Grep, Glob
 model: sonnet
 argument-hint: [files, or "all" for pre-existing comments too]
@@ -15,6 +15,11 @@ only narrates the code below it goes away entirely.
 ## Workflow
 
 1. **Determine scope**:
+   - If the caller supplied `changeManifestPath`, read that manifest and use its task
+     patch paths and changed ranges. They replace branch discovery/fetch and define
+     which comments are task additions. A baselineDirty file's pre-existing comments
+     are not new. Refresh the manifest after edits; preserve all exemptions below.
+     Do not use the branch diff as fallback when a manifest is available.
    - If the user gave files, use those as the file list and skip the discovery commands
      below — but still resolve `$BASE_BRANCH`, because step 2 diffs against it either way.
      Passing files narrows *which files* are examined; it does not widen comment-level
@@ -34,7 +39,7 @@ only narrates the code below it goes away entirely.
      generated files (`*.pb.go`, `*.gen.*`, files whose first line is `Code generated`),
      `vendor/`, `node_modules/`, and OS temp paths.
 
-2. **Find the added comments.** For each tracked file, `git diff origin/$BASE_BRANCH -U0
+2. **Find the added comments.** With a manifest use its per-file task patches (including new/deleted files), not branch-wide patches. Otherwise, for each tracked file, `git diff origin/$BASE_BRANCH -U0
    -- <file>` and take the `+` lines that are comments. For untracked files, every
    comment in the file is new. If a comment block has any added line, the whole block is
    in scope — a two-line addition to an existing 6-line block brings all 8 lines in.

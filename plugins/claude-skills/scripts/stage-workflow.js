@@ -54,7 +54,13 @@ function stage(guidelinesDir, workflowFile, outFile) {
 
   // A replacer function, so `$&` or `$'` inside a guideline line is not
   // expanded as a replacement pattern.
-  const staged = source.replace(MARKER, () => `const GUIDELINE_META = ${JSON.stringify(meta)}`);
+  let staged = source.replace(MARKER, () => `const GUIDELINE_META = ${JSON.stringify(meta)}`);
+  const runtimeMarker = "// GROUPED_CHECK_RUNTIME";
+  if (staged.includes(runtimeMarker)) {
+    if (staged.split(runtimeMarker).length !== 2) throw new Error("Expected exactly one grouped runtime marker");
+    const runtime = fs.readFileSync(path.join(__dirname, "grouped-check-runtime.js"), "utf8");
+    staged = staged.replace(runtimeMarker, () => runtime);
+  }
 
   fs.writeFileSync(outFile, staged);
 

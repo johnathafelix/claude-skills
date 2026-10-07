@@ -1,6 +1,6 @@
 export const meta = {
   name: 'code-review',
-  description: 'opus code review: one finder per angle, adversarial verification per finding, then a gap sweep',
+  description: 'Grouped opus review with bounded independent verification; thorough mode adds a sweep',
   phases: [{ title: 'Find' }, { title: 'Verify' }, { title: 'Sweep' }],
 }
 
@@ -50,7 +50,9 @@ const changeNote = typeof parsedArgs.changeNote === 'string' ? parsedArgs.change
 const planPath = typeof parsedArgs.planPath === 'string' ? parsedArgs.planPath : ''
 
 // Fail loud on a typo rather than silently reviewing at the wrong level.
-const EFFORT = parsedArgs.effort === undefined ? 'high' : parsedArgs.effort
+const profile = parsedArgs.profile || 'standard'
+if (!['fast', 'standard', 'thorough'].includes(profile)) throw new Error('profile must be fast, standard or thorough')
+const EFFORT = parsedArgs.effort === undefined ? (profile === 'thorough' ? 'high' : 'medium') : parsedArgs.effort
 
 if (!EFFORT_LEVELS.includes(EFFORT)) {
   throw new Error(`code-review workflow received effort ${JSON.stringify(EFFORT)} — expected one of ${EFFORT_LEVELS.join(', ')}`)
@@ -184,6 +186,8 @@ const FINDINGS_SCHEMA = {
           severity: { type: 'string', enum: ['issue', 'nit'] },
           description: { type: 'string' },
           suggestedFix: { type: 'string' },
+          dimension: { type: 'string' },
+          claimKey: { type: 'string' },
         },
       },
     },
@@ -218,7 +222,8 @@ function contextBlock() {
 ${fileList}
 
 What changed: ${changeNote || 'no change note provided — review the files as given'}
-${planPath ? `\nThe implementation plan is at (read it for intended behavior): ${planPath}` : ''}`
+${planPath ? `\nImplementation plan (consult the relevant section when intent is ambiguous): ${planPath}` : ''}
+${parsedArgs.changeManifestPath ? `Task manifest: ${parsedArgs.changeManifestPath}. Read its per-file patches. They are authoritative, including additions, deletions and pre-existing dirty baselines; do not rediscover a branch-wide diff.` : ''}`
 }
 
 function descriptionRule(dim) {
@@ -227,7 +232,8 @@ function descriptionRule(dim) {
     : '`description` must state the concrete cost: what is duplicated, wasted, left untested, harder to maintain, or which rule is broken.'
 }
 
-const SHARED_RULES = `- Read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
+const SHARED_RULES = `- If a task manifest is supplied, read its patches instead of the branch diff. Otherwise read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
+- Keep distinct defects separate, even on the same line. claimKey may name a specific violated invariant to deduplicate equivalent claims across angles.
 - Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
 - \`line\` is the 1-based line number in the file as it exists now in the code under review.
 - \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.
@@ -257,7 +263,7 @@ function sweepPrompt(confirmed) {
 
 ${contextBlock()}
 
-Already confirmed by the first pass:
+Already reported by the first pass (candidates, not yet challenged):
 ${known}
 
 Re-read the diff and the enclosing functions looking ONLY for defects not already listed. Do not re-derive or re-confirm anything above — your job is gaps. Focus on what a first pass tends to miss: moved or extracted code that dropped a guard or anchor; second-tier footguns (a default evaluated once, \`hash()\` non-determinism, a lock scope that shrank, predicate methods with side effects); setup/teardown asymmetry in tests; config defaults flipped.
@@ -280,7 +286,7 @@ Severity claimed: ${f.severity}
 Claim: ${f.description}
 Suggested fix: ${f.suggestedFix}
 
-${locationNote}Read the actual file content at that location, and the diff (\`${diffCommand}\`), before judging.
+${locationNote}Read the actual file content at that location and ${parsedArgs.changeManifestPath ? `the task manifest ${parsedArgs.changeManifestPath} and its patches` : `the diff (\`${diffCommand}\`)`} before judging.
 
 Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; for an issue, the fix would not change behavior; for a nit, the stated cost (duplication, naming, wording) is not actually there.${dim.refute ? ` ${dim.refute}` : ''}
 
@@ -289,202 +295,124 @@ Do not refute merely because the trigger depends on runtime state when that stat
 If you confirm a "nit" that actually affects behavior or correctness, set severity: "issue". Never downgrade an "issue" to a nit; omit severity to keep the claimed one.`
 }
 
-// Verifies every finding concurrently, one adversarial agent each, with no cap.
-async function verifyAll(findings, dim) {
-  if (findings.length === 0) return []
-
-  const verdicts = await parallel(
-    findings.map(f => () =>
-      agent(verifyPrompt(f, dim), {
-        label: `verify:${dim.key}:${f.file}:${f.line}`,
-        phase: 'Verify',
-        model: MODEL,
-        effort: EFFORT,
-        schema: VERDICT_SCHEMA,
-      }),
-    ),
-  )
-
-  const confirmed = []
-
-  // Index-paired with `findings`: parallel() resolves a thrown thunk to `null` in place.
-  for (let i = 0; i < verdicts.length; i++) {
-    const verdict = verdicts[i]
-    const f = findings[i]
-
-    // A missing verdict is NOT a refutation — treating it as one would silently delete
-    // a real finding. Log it and drop it from both lists instead of guessing.
-    if (!verdict) {
-      log(`${dim.key}: verifier for ${f.file}:${f.line} returned no result (user skip or terminal API error) — dropped, not auto-confirmed or auto-refuted`)
-
-      continue
+// Bound fan-out and preserve missing verdicts as visible coverage gaps.
+const stats = { profile, finderCalls: 0, verifierCalls: 0, candidates: 0, duplicates: 0 }
+const started = Date.now()
+const dimensionsUnverified = new Set()
+const unchallenged = []
+const refuted = []
+const covered = new Set(Array.isArray(parsedArgs.coveredDimensions) ? parsedArgs.coveredDimensions : [])
+// Ownership can suppress overlapping checks, never core correctness or security.
+const allowedCovered = new Set(['tests', 'comments', 'conventions'])
+for (const key of covered) if (!allowedCovered.has(key)) throw new Error(`Cannot delegate essential dimension ${key}`)
+const active = DIMENSIONS.filter(d => !covered.has(d.key))
+const fastKeys = new Set(['line-scan', 'removed-behavior', 'cross-file', 'language-pitfalls', 'wrapper-proxy', 'error-handling', 'type-invariants', 'security', 'tests'])
+const selected = profile === 'fast' ? active.filter(d => fastKeys.has(d.key)) : active
+const batchesOf = (items, count) => Array.from({ length: Math.ceil(items.length / count) }, (_, i) => items.slice(i * count, (i + 1) * count))
+const normalize = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+async function pool(items, worker) {
+  let next = 0
+  const output = new Array(items.length).fill(null)
+  await parallel(Array.from({ length: Math.min(4, items.length) }, () => async () => {
+    while (next < items.length) {
+      const i = next++
+      try { output[i] = await worker(items[i], i) }
+      catch (e) { log(`worker failed: ${e.message || e}`) }
     }
-
-    if (verdict.refuted === false) {
-      confirmed.push({ ...f, severity: higherSeverity(f.severity, verdict.severity ?? f.severity), dimension: dim.key })
+  }))
+  return output
+}
+function validFinding(f) {
+  return f && typeof f.file === 'string' && f.file.trim() && Number.isInteger(f.line) && f.line > 0 && ['issue', 'nit'].includes(f.severity) && typeof f.description === 'string' && f.description.trim() && typeof f.suggestedFix === 'string' && f.suggestedFix.trim()
+}
+function deduplicate(items) {
+  const unique = new Map()
+  for (const f of items) {
+    if (!validFinding(f)) { dimensionsUnverified.add(f?.dimension || 'malformed-finding'); continue }
+    const key = `${f.file}:${f.line}:${normalize(f.claimKey || f.description)}`
+    const first = unique.get(key)
+    if (!first) unique.set(key, { ...f, dimensions: [f.dimension || 'external'] })
+    else {
+      stats.duplicates++
+      first.severity = higherSeverity(first.severity, f.severity)
+      first.dimensions = [...new Set([...first.dimensions, f.dimension || 'external'])]
     }
   }
-
-  return confirmed
+  return [...unique.values()].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
 }
-
-// agent() returns null only on user-skip or a terminal API error the harness already
-// retried — not on "found nothing." Treat null as unverified, never as a clean pass.
-function readFindings(result, dim) {
-  if (result === null || result === undefined) {
-    log(`${dim.key}: UNVERIFIED — agent returned no result (user skip or terminal API error)`)
-
-    return null
-  }
-
-  if (!Array.isArray(result.findings)) {
-    log(`${dim.key}: UNVERIFIED — result had no findings array`)
-
-    return null
-  }
-
-  return result.findings
+function external(items) {
+  return items.map(f => ({ ...f, dimension: f.dimension || (f.rule ? `test-check/${f.rule}` : 'external'), severity: f.severity === 'nit' || f.severity === 'info' ? 'nit' : 'issue', suggestedFix: f.suggestedFix || f.action }))
 }
-
-const findings = []
-const dimensionsUnverified = []
-
-async function review() {
+async function find() {
   phase('Find')
-
-  // Pipeline, not parallel+barrier: each angle's findings verify while other angles are
-  // still finding — no cross-angle dependency justifies waiting for all finders.
-  const reviewed = await pipeline(
-    DIMENSIONS,
-    dim =>
-      agent(findPrompt(dim), {
-        label: `find:${dim.key}`,
-        phase: 'Find',
-        model: MODEL,
-        effort: EFFORT,
-        schema: FINDINGS_SCHEMA,
-      }),
-    async (result, dim) => {
-      const found = readFindings(result, dim)
-
-      if (found === null) return { confirmed: [], unverified: true }
-
-      return { confirmed: await verifyAll(found, dim), unverified: false }
-    },
-  )
-
-  // Index-paired with DIMENSIONS: a stage that throws drops that pipeline item to `null`,
-  // and without the index we'd lose which angle vanished.
-  for (let i = 0; i < DIMENSIONS.length; i++) {
-    const dim = DIMENSIONS[i]
-    const r = reviewed[i]
-
-    if (!r) {
-      log(`${dim.key}: UNVERIFIED — pipeline stage threw for this angle`)
-      dimensionsUnverified.push(dim.key)
-
-      continue
+  const groups = profile === 'thorough' ? selected.map(d => [d]) : [
+    selected.filter(d => d.kind === 'bug'),
+    selected.filter(d => ['tests', 'comments', 'conventions'].includes(d.key)),
+    selected.filter(d => d.kind === 'cost' && !['tests', 'comments', 'conventions'].includes(d.key)),
+  ].filter(g => g.length)
+  const results = await pool(groups, async group => {
+    stats.finderCalls++
+    const prompt = group.length === 1 ? findPrompt(group[0]) : `Review these related angles in one source-reading pass. Read changed hunks and enclosing code once, expanding to callers as needed.\n${contextBlock()}\nAngles:\n${group.map(d => `${d.key}: ${d.prompt} ${descriptionRule(d)}`).join('\n')}\n${SHARED_RULES}\nReturn at most 8 concrete findings, each with dimension set to one supplied angle. Report equivalent claims once. Return findings: [] when clean.`
+    const result = await agent(prompt, { label: `find:${group.map(d => d.key).join('+')}`, phase: 'Find', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
+    if (!result || !Array.isArray(result.findings)) return null
+    const accepted = []
+    for (const f of result.findings) {
+      const dimension = group.length === 1 ? group[0].key : f.dimension
+      if (!validFinding(f) || !group.some(d => d.key === dimension)) { for (const d of group) dimensionsUnverified.add(d.key); continue }
+      accepted.push({ ...f, dimension })
     }
-
-    if (r.unverified) {
-      dimensionsUnverified.push(dim.key)
-
-      continue
-    }
-
-    for (const f of r.confirmed) findings.push(f)
+    return accepted
+  })
+  const candidates = []
+  results.forEach((r, i) => {
+    if (!r) for (const d of groups[i]) dimensionsUnverified.add(d.key)
+    else candidates.push(...r)
+  })
+  if (profile === 'thorough') {
+    phase('Sweep')
+    stats.finderCalls++
+    try {
+      const result = await agent(sweepPrompt(candidates), { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
+      if (!result || !Array.isArray(result.findings)) dimensionsUnverified.add('sweep')
+      else for (const f of result.findings) {
+        if (validFinding(f)) candidates.push({ ...f, dimension: 'sweep' })
+        else dimensionsUnverified.add('sweep')
+      }
+    } catch (e) { dimensionsUnverified.add('sweep'); log(`sweep: ${e.message || e}`) }
   }
-
-  phase('Sweep')
-
-  // Runs after every angle so it can see the full confirmed list and hunt only for gaps.
-  try {
-    const sweepResult = await agent(sweepPrompt(findings), {
-      label: 'find:sweep',
-      phase: 'Sweep',
-      model: MODEL,
-      effort: EFFORT,
-      schema: FINDINGS_SCHEMA,
-    })
-
-    const found = readFindings(sweepResult, SWEEP)
-
-    if (found === null) {
-      dimensionsUnverified.push(SWEEP.key)
-    } else {
-      for (const f of await verifyAll(found, SWEEP)) findings.push(f)
-    }
-  } catch (e) {
-    log(`sweep: UNVERIFIED — ${(e && e.message) || e}`)
-    dimensionsUnverified.push(SWEEP.key)
-  }
+  return candidates
 }
-
-// One verifier group per source dimension, so each verifier sees the checker's rule.
-async function verifyGiven() {
-  phase('Verify')
-
-  const groups = new Map()
-
-  for (const f of verifyOnly) {
-    const key = typeof f.dimension === 'string' && f.dimension ? f.dimension : 'external'
-
-    if (!groups.has(key)) {
-      groups.set(key, { dim: { key, label: f.dimensionLabel || key }, items: [] })
-    }
-
-    groups.get(key).items.push({ ...f, severity: f.severity === 'nit' ? 'nit' : 'issue' })
-  }
-
-  const results = await parallel([...groups.values()].map(g => () => verifyAll(g.items, g.dim)))
-  const keys = [...groups.keys()]
-
-  for (let i = 0; i < results.length; i++) {
-    if (!results[i]) {
-      log(`${keys[i]}: UNVERIFIED — verification threw for this group`)
-      dimensionsUnverified.push(keys[i])
-
-      continue
-    }
-
-    for (const f of results[i]) findings.push(f)
-  }
-}
-
-if (verifyOnly) {
-  await verifyGiven()
-} else {
-  await review()
-}
-
-// Angles overlap (a stale doc pointer is both a line-scan and a conventions finding), so
-// merge confirmed findings on the same file:line. Each angle's text is kept, since two
-// angles can flag different defects on one line.
-const merged = new Map()
-
-for (const f of findings) {
-  const key = `${f.file}:${f.line}`
-  const first = merged.get(key)
-
-  if (!first) {
-    merged.set(key, { ...f })
-
-    continue
-  }
-
-  first.dimension += `, ${f.dimension}`
-  first.severity = higherSeverity(first.severity, f.severity)
-  first.description += `\n\nAlso flagged by ${f.dimension}: ${f.description}`
-  first.suggestedFix += `\n\n(${f.dimension}) ${f.suggestedFix}`
-}
-
-const deduped = [...merged.values()].sort((a, b) => {
-  if (a.file !== b.file) return a.file < b.file ? -1 : 1
-  return a.line - b.line
+const candidates = deduplicate(verifyOnly ? external(verifyOnly) : [...await find(), ...external(Array.isArray(parsedArgs.externalFindings) ? parsedArgs.externalFindings : [])])
+stats.candidates = candidates.length
+phase('Verify')
+const findings = []
+const verdictBatchSchema = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array', items: { type: 'object', required: ['id', 'refuted', 'reason'], properties: { id: { type: 'integer' }, ...VERDICT_SCHEMA.properties } } } } }
+const verified = await pool(batchesOf(candidates, 4), async (batch, index) => {
+  if (index >= 8) return null // At most 8 calls / 32 claims; excess stays unchallenged.
+  stats.verifierCalls++
+  return await agent(`Independently challenge this batch. Read shared context once, but return exactly one verdict for EACH id. Do not assume agreement with the finder. For test claims read the applicable test-check guideline (if provided) and honor its exceptions.\n${batch.map((f, id) => {
+    const dim = DIMENSIONS.find(d => d.key === f.dimension) || { key: f.dimension, label: f.dimensionLabel || f.dimension }
+    return `ID ${id}\n${verifyPrompt(f, dim)}${f.guidelinePath ? `\nGuideline: ${f.guidelinePath}` : ''}${f.coverageFile ? `\nCoverage: ${f.coverageFile}` : ''}`
+  }).join('\n\n')}`, { label: `verify:batch:${index}`, phase: 'Verify', model: MODEL, effort: EFFORT, schema: verdictBatchSchema })
 })
-
+batchesOf(candidates, 4).forEach((batch, index) => {
+  for (let id = 0; id < batch.length; id++) {
+    const f = batch[id]
+    const matches = Array.isArray(verified[index]?.verdicts) ? verified[index].verdicts.filter(v => v && v.id === id) : []
+    const v = matches.length === 1 ? matches[0] : null
+    if (!v || typeof v.refuted !== 'boolean' || typeof v.reason !== 'string' || !v.reason.trim() || (v.severity !== undefined && !['issue', 'nit'].includes(v.severity))) {
+      unchallenged.push({ ...f, verified: false, verificationReason: index >= 8 ? 'verifier budget exhausted' : 'missing or malformed verdict' })
+      for (const dimension of f.dimensions) dimensionsUnverified.add(dimension)
+    } else if (v.refuted) refuted.push({ ...f, refutedReason: v.reason })
+    else findings.push({ ...f, severity: higherSeverity(f.severity, v.severity || f.severity), verified: true })
+  }
+})
+findings.push(...unchallenged)
+findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
+stats.durationMs = Date.now() - started
 return {
-  findings: deduped,
-  findingCount: deduped.length,
-  dimensionsUnverified: dimensionsUnverified.sort(),
+  findings, findingCount: findings.length, dimensionsUnverified: [...dimensionsUnverified].sort(),
+  unchallenged, refuted, stats,
+  dimensionsDelegated: [...covered],
+  dimensionsSkipped: verifyOnly ? [] : active.filter(d => !selected.includes(d)).map(d => d.key),
 }

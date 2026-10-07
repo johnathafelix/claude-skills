@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated high/opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments.
+description: "Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus) implements it, a dedicated high/opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -361,13 +361,13 @@ cp "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/co
 ```
 Workflow({
   scriptPath: "<scratchpad>/code-review-workflow.js",
-  args: { files: <the diff list>, baseBranch: BASE_BRANCH, effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
+  args: { files: <the diff list>, baseBranch: BASE_BRANCH, profile: "thorough", effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
 })
 ```
 
 Normalize the source path to an absolute one before the `cp` rather than leaving `..` for
 the runtime to resolve. Wait for the completion notification, then read
-`{ findings, findingCount, dimensionsUnverified }`. Report any `dimensionsUnverified`
+`{ findings, findingCount, dimensionsUnverified, unchallenged }`. Keep only `verified: true` findings in the fix plan; report unchallenged claims as gaps, never confirmed fixes. Report any `dimensionsUnverified`
 plainly later — an unverified dimension is not a clean pass on it. If `findingCount` is 0
 **and** `TEST_FINDINGS` from 5b is empty, log a clean review and skip to Phase 8. If either
 list is non-empty, continue to Phase 7 with whichever lists have entries — a clean code
