@@ -48,7 +48,7 @@ untracked and `--diff-filter=ACMD` alone misses it. If `files` is empty, report 
 is nothing to review and stop.
 
 Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT,
-diffCommand: "git diff <MERGE_BASE>" }`, substituting the pinned merge-base SHA. This
+repoDir: <absolute repo root>, diffCommand: "git diff <MERGE_BASE>" }`, substituting the pinned merge-base SHA. This
 includes working-tree changes without reviewing unrelated commits added to the base.
 
 ## Step 2b — PR mode (URL given)
@@ -88,22 +88,29 @@ never touched.
 ## Step 3 — Dispatch
 
 `Workflow` rejects a `scriptPath` outside the working directory or an added directory, and
-this skill's own directory is usually the plugin cache. Copy the script into the
-scratchpad first:
+this skill's own directory is usually the plugin cache. Use the exact session scratchpad
+path declared by the harness, not an arbitrary mktemp directory or a path under .git.
+Stage the script there first; staging inlines its shared input helpers:
 
 ```bash
-cp "<absolute dir of this SKILL.md>/workflow.js" "<scratchpad>/code-review-workflow.js"
+node "<plugin>/scripts/stage-workflow.js" - "<absolute dir of this SKILL.md>/workflow.js" "<scratchpad>/code-review-workflow.js"
 ```
 
 Resolve the directory from this file's own location — do not hardcode a home directory.
-If the session declares no scratchpad, read `workflow.js` in full and pass it as `script`.
+If the session declares no readable scratchpad, stage at a temporary path and pass the
+**staged contents** as Workflow `script`; never dispatch that temporary scriptPath.
 
 ```
 Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: <Step 2 args> })
 ```
 
 Pass `args` as a real JSON object, not a JSON-encoded string. Wait for the completion
-notification, then read `{ findings, findingCount, dimensionsUnverified, unchallenged, refuted, dimensionsSkipped, stats }`.
+notification, then read `{ findings, findingCount, dimensionsUnverified, unchallenged, rejectedFindings, refuted, dimensionsSkipped, stats }`.
+
+The default `nitPolicy: "material"` limits each finder to two nits with concrete
+maintenance/testing cost. It does not limit correctness issues or discard existing
+claims before challenge. Set `nitPolicy: "all"` only for an explicitly requested style
+audit; thorough controls review depth, not the volume of style suggestions.
 
 ## Step 4 — Report
 
@@ -128,7 +135,17 @@ behavior or correctness); list issues before nits.
 If `dimensionsUnverified` is non-empty, list those angles under **Not verified** and say
 plainly that an unverified angle is not a clean pass. Always report `unchallenged` claims (including budget overflow), refutation counts and
 `dimensionsSkipped` for the selected profile. With zero findings and no gaps, say the
-review is clean for that profile, not for omitted dimensions. Workflow stats report
-actual finder/verifier call counts, confirmed count and find/sweep/verify durations.
+review is clean for that profile, not for omitted dimensions. Report rejectedFindings
+with their validationErrors separately from unchallenged claims; a malformed claim
+has not reached a verifier. Workflow stats report call counts and confirmed count.
+Read compact timing evidence without loading the metadata's embedded scripts/prompts:
+
+```bash
+node "<plugin>/scripts/workflow-metrics.js" "<Transcript dir returned by Workflow>"
+```
+
+The helper returns harness durationMs and phaseAgentSpansMs (first agent start to last
+agent finish per phase, including overlapping agents). Missing timing is null, not zero.
+These spans exclude coordinator overhead. Never use wall clocks inside a Workflow.
 
 End there. Do not offer a fix plan or start fixing.

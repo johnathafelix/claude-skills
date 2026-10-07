@@ -44,7 +44,8 @@ context matchers, auto-registered mock assertions and connection-loss DB mocks.
 ## Stage and run
 
 Resolve paths relative to this SKILL.md, never a hardcoded home directory. Do not read
-all guideline bodies into the coordinator context. Stage into the session scratchpad:
+all guideline bodies into the coordinator context. Stage into the exact session
+scratchpad declared by the harness; an arbitrary temporary directory is not readable:
 
 ```bash
 node "<plugin>/scripts/stage-workflow.js" "<skill>/guidelines" "<skill>/workflow.js" "<scratchpad>/check-workflow.js"
@@ -52,7 +53,11 @@ node "<plugin>/scripts/stage-workflow.js" "<skill>/guidelines" "<skill>/workflow
 
 This computes paths and proof anchors and inlines a shared runtime; the staged script
 needs no imports. If no readable scratchpad exists, stage at a temporary path and pass
-the staged contents as Workflow `script`. Never dispatch the unstaged source.
+the staged contents as Workflow `script`, never that temporary scriptPath. Never dispatch
+the unstaged source. Pass repoDir as the absolute checkout root; paths normalize to
+repo-relative form before scope validation. Paths outside the checkout remain invalid.
+Standalone checks retain all style rules; pipelines pass nitPolicy: "material" to limit
+each pass to two nits with concrete cost, preserving correctness findings.
 The script accepts an object or JSON args string. Default `mode: "grouped"`; request
 `"individual"` for thorough isolated checks. Grouping preserves every applicable rule.
 Restricted opus checkers share source reads within a group, at most four in flight.
@@ -61,7 +66,10 @@ reads, not comprehension. Retry a failed rule once, retaining successful sibling
 Terminal API failures already retried by the harness do not trigger another loop.
 
 Await the Workflow completion, not just its task ID. Results include `findings`,
-`findingCount`, `unverified`, and `stats` (groups, checkCalls, verifierCalls, durationMs).
+`findingCount`, `unverified`, `rejectedFindings` with validationErrors, and `stats`
+(groups, checkCalls, verifierCalls). Read elapsed duration from completed Workflow
+metadata via scripts/workflow-metrics.js with the returned Transcript dir; phase agent
+spans exclude coordinator overhead. Missing timing is null, never a fabricated zero.
 Always surface unverified rules and skipped rules with reasons. Empty findings with
 an unverified rule is incomplete, never a clean pass. Keep full reports in scratchpad
 and present concise actionable findings in context.
@@ -76,7 +84,7 @@ Workflow args:
 
 ```text
 { guidelines: [{ stem: "coverage" }, ...], sourceFiles, testFiles, changedRanges,
-  coverageFile, baseBranch, changeNote, changeManifestPath, mode: "grouped",
+  coverageFile, repoDir, baseBranch, changeNote, changeManifestPath, mode: "grouped",
   verify: true }
 ```
 

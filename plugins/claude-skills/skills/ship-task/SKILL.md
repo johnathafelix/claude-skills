@@ -111,8 +111,11 @@ files remain in review scope; language checkers inspect surviving code and calle
 Exclude generated/vendor files from language checks and list relevant exclusions.
 
 Run applicable `golang-check` / `ts-check` and `test-check`, passing
-`changeManifestPath`, explicit file lists, profile and baseline. Stage checker scripts
+`changeManifestPath`, explicit repo-relative file lists, repoDir, profile, baseline and
+`nitPolicy: "material"`. Stage checker scripts
 with `scripts/stage-workflow.js`; it inlines the shared runtime and guideline anchors.
+Use the exact session scratchpad declared by the harness, not an arbitrary temp directory.
+Without a readable scratchpad, pass staged contents as Workflow script instead of scriptPath.
 Use `mode: "grouped"` normally; thorough can request `"individual"`.
 Go retains per-rule file scopes and per-module Go-version gates. Do not read guideline
 bodies into the coordinator context; checker agents read their short checklists.
@@ -128,12 +131,20 @@ test-check retains independent verification. Attach guideline paths, coverage pa
 original rule/severity, and a precise `suggestedFix` (test `action`) to candidates.
 Map concrete correctness/regression issues to `issue`; convention/style suggestions
 are `nit`. The challenger may raise severity, never lower an issue.
+Use description/suggestedFix for implementer candidates too; summary/failure_scenario
+are accepted aliases. Malformed candidates remain in rejectedFindings with validationErrors.
+Report these as gaps, distinct from unchallenged verdicts; never silently drop them.
 
-Copy `code-review/workflow.js` into the scratchpad, then dispatch:
+Stage the review runtime into the same session scratchpad, then dispatch:
+
+```bash
+node "<plugin>/scripts/stage-workflow.js" - "<plugin>/skills/code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
+```
 
 ```text
 Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: {
   files: <all task paths>, baseBranch: <base>, profile: <selected profile>,
+  repoDir: <absolute repo root>, nitPolicy: "material",
   changeNote: <one-line intent>, planPath: <approved plan>,
   changeManifestPath: "<scratchpad>/ship-task/manifest.json",
   externalFindings: <language and test candidates>,
@@ -194,6 +205,9 @@ updates the draft once; skip `/update-pr-description` when the body was already 
 Respect the session's existing publishing authorization and any prepare-only constraint.
 
 Final report: outcome, PR URL (or prepared state), verification result, material gaps,
-profile, actual agent calls and phase durations from workflow stats. Do not estimate
+profile and actual agent calls from workflow stats. Read elapsed duration from completed
+Workflow metadata with scripts/workflow-metrics.js (see code-review Step 4). Phase
+agent spans exclude coordinator overhead; missing times are null. Sandbox scripts
+cannot use wall clocks; do not invent zero durations. Do not estimate
 billed tokens from partial subagent notifications. Keep detailed evidence at the
 artifact paths; avoid repeating every clean check in prose.

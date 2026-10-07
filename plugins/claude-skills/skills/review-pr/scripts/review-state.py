@@ -166,7 +166,7 @@ def prepare(repo, base, head, url, cache_dir, plugin=PLUGIN, profile="standard",
 
 
 def save(context, report):
-    if not report.get("complete") or any(report.get(k) for k in ("dimensionsUnverified", "unverified", "unchallenged")):
+    if not report.get("complete") or any(report.get(k) for k in ("dimensionsUnverified", "unverified", "unchallenged", "rejectedFindings")):
         return {"saved": False, "reason": "review incomplete; prior cache retained"}
     findings = report.get("findings")
     if not valid_findings(findings):

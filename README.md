@@ -178,6 +178,14 @@ successful siblings. Independent challengers share source context across four cl
 with at most eight calls and four agents active. Overflow and missing verdicts remain
 visible, and downstream PR workflows do not post them as confirmed findings.
 
+Pipeline finders focus on correctness and nits with concrete maintenance/testing cost;
+standalone language checks retain their full style rules. Scope validation normalizes
+absolute and repo-relative paths within the pinned checkout. Rejected claims retain
+their validation errors and prevent complete cache reuse. Stage every review/check
+script with `stage-workflow.js` into the harness-provided scratchpad; use `-` instead
+of a guideline directory for code-review. `workflow-metrics.js` reads compact elapsed
+times and phase agent spans from completed harness metadata, without sandbox clocks.
+
 The task manifest helper stores a baseline and patches outside the repo, including
 new/deleted files and edits within pre-existing dirty files. It does not stage changes.
 Coverage/test evidence needs matching inputs rather than a recent timestamp. Workers'

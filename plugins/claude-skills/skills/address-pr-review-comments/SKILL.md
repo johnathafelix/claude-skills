@@ -355,18 +355,18 @@ Otherwise dispatch the `code-review` skill's `workflow.js` — the same reviewer
 Stage it in the scratchpad first — `Workflow` rejects the plugin-cache path on its own:
 
 ```bash
-cp "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
+node "<plugin>/scripts/stage-workflow.js" - "<absolute dir of this SKILL.md>/../code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
 ```
 
 ```
 Workflow({
   scriptPath: "<scratchpad>/code-review-workflow.js",
-  args: { files: <the diff list>, baseBranch: BASE_BRANCH, profile: "thorough", effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
+  args: { files: <the diff list>, repoDir: <absolute repo root>, baseBranch: BASE_BRANCH, profile: "thorough", effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
 })
 ```
 
-Normalize the source path to an absolute one before the `cp` rather than leaving `..` for
-the runtime to resolve. Wait for the completion notification, then read
+Use the exact harness-provided session scratchpad. Without a readable scratchpad,
+pass staged contents as Workflow script. Wait for the completion notification, then read
 `{ findings, findingCount, dimensionsUnverified, unchallenged }`. Keep only `verified: true` findings in the fix plan; report unchallenged claims as gaps, never confirmed fixes. Report any `dimensionsUnverified`
 plainly later — an unverified dimension is not a clean pass on it. If `findingCount` is 0
 **and** `TEST_FINDINGS` from 5b is empty, log a clean review and skip to Phase 8. If either

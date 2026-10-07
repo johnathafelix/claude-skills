@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Stages a check skill's workflow.js (ts-check, golang-check, test-check) for the
+ * Stages code-review and the language/test check skills for the
  * Workflow tool, with each guideline's proof-of-read anchors injected: its
  * absolute path, line count (newlines, as `wc -l` counts them), first line and
  * last non-empty line. Computing them here means the orchestrating model never
  * transcribes them by hand — a long markdown last line copied into args by hand
  * used to drift by a character and fail the gate.
  *
- * Usage: node stage-workflow.js <guidelines dir> <workflow.js> <output path>
+ * Usage: node stage-workflow.js <guidelines dir, or - for code-review> <workflow.js> <scratchpad output path>
  * Prints one `stem<TAB>path<TAB>first line` row per staged guideline.
  */
 
@@ -41,25 +41,29 @@ function guidelineMeta(dir) {
 
 function stage(guidelinesDir, workflowFile, outFile) {
   const source = fs.readFileSync(workflowFile, "utf8");
-
-  if (source.split(MARKER).length !== 2) {
-    throw new Error(`${workflowFile}: expected exactly one "${MARKER}" line`);
+  const isReview = guidelinesDir === null || guidelinesDir === '-';
+  if (source.split(MARKER).length !== (isReview ? 1 : 2)) {
+    throw new Error(`${workflowFile}: expected ${isReview ? 'no' : 'exactly one'} "${MARKER}" line`);
   }
-
-  const meta = guidelineMeta(path.resolve(guidelinesDir));
-
-  if (Object.keys(meta).length === 0) {
+  const meta = isReview ? {} : guidelineMeta(path.resolve(guidelinesDir));
+  if (!isReview && Object.keys(meta).length === 0) {
     throw new Error(`${guidelinesDir}: no guideline .md files found`);
   }
 
   // A replacer function, so `$&` or `$'` inside a guideline line is not
   // expanded as a replacement pattern.
-  let staged = source.replace(MARKER, () => `const GUIDELINE_META = ${JSON.stringify(meta)}`);
+  let staged = isReview ? source : source.replace(MARKER, () => `const GUIDELINE_META = ${JSON.stringify(meta)}`);
   const runtimeMarker = "// GROUPED_CHECK_RUNTIME";
   if (staged.includes(runtimeMarker)) {
     if (staged.split(runtimeMarker).length !== 2) throw new Error("Expected exactly one grouped runtime marker");
     const runtime = fs.readFileSync(path.join(__dirname, "grouped-check-runtime.js"), "utf8");
     staged = staged.replace(runtimeMarker, () => runtime);
+  }
+  const inputsMarker = '// REVIEW_INPUT_RUNTIME';
+  if (staged.includes(inputsMarker) || isReview) {
+    if (staged.split(inputsMarker).length !== 2) throw new Error('Expected exactly one review input runtime marker');
+    const inputs = fs.readFileSync(path.join(__dirname, 'workflow-inputs.js'), 'utf8');
+    staged = staged.replace(inputsMarker, () => inputs);
   }
 
   fs.writeFileSync(outFile, staged);
@@ -71,7 +75,7 @@ if (require.main === module) {
   const [guidelinesDir, workflowFile, outFile] = process.argv.slice(2);
 
   if (!outFile) {
-    console.error("usage: node stage-workflow.js <guidelines dir> <workflow.js> <output path>");
+    console.error("usage: node stage-workflow.js <guidelines dir, or - for code-review> <workflow.js> <scratchpad output path>");
     process.exit(2);
   }
 

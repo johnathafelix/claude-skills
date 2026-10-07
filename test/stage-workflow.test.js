@@ -104,6 +104,23 @@ test("stage: preserves $& and $' in anchors", () => {
   assert.strictEqual(injected.rule.lastLine, "price $& and $'");
 });
 
+test('stage CLI supports code-review without guidelines and produces a standalone script', t => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const out = path.join(dir, 'review.js');
+  const result = spawnSync('node', [SCRIPT, '-', path.join(PLUGIN, 'skills/code-review/workflow.js'), out], { encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  const source = fs.readFileSync(out, 'utf8');
+  assert.ok(source.startsWith('export const meta'));
+  assert.ok(!source.includes('// REVIEW_INPUT_RUNTIME'));
+  assert.ok(!source.includes('require('));
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  return new AsyncFunction('args', 'agent', 'parallel', 'phase', 'log', source.replace('export const meta', 'const meta'))(
+    { files: ['a.go'], verifyOnly: [] }, () => { throw new Error('no model call expected'); },
+    thunks => Promise.all(thunks.map(f => f())), () => {}, () => {},
+  ).then(result => assert.strictEqual(result.stats.confirmed, 0));
+});
+
 const failureCases = [
   { name: "no marker", workflow: "const x = 1\n", guideline: "# T\n", error: /expected exactly one/ },
   {

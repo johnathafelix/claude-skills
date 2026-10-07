@@ -39,6 +39,9 @@ every command: a previous shell cd does not persist.
 ## Pin the worktree and scope
 
 Read code-review's **Steps 2b and 3** for temporary worktree creation/workflow staging.
+Use the exact harness-provided session scratchpad for every staged workflow. A temporary
+worktree path is not automatically a readable script directory. Without a readable
+scratchpad, pass staged contents as Workflow script, never an arbitrary temp scriptPath.
 Hold cleanup until checks, verification and cache save finish. Verify the checked-out
 head equals HEAD_SHA; a head that moved during fetch stops as head_moved after cleanup.
 Include added, renamed and deleted files.
@@ -69,8 +72,10 @@ Keep unrelocated prior claims as gaps rather than submitting stale coordinates.
 ## Collect candidates and challenge once
 
 Run language/test checks with grouped defaults and the same pinned context. Dispatch
-independent check Workflows before waiting. Pass absolute paths under WT and
-`repoDir: WT, diffCommand: context.diffCommand`; do not fetch/recompute another base.
+independent check Workflows before waiting. Pass repo-relative paths and
+`repoDir: context.repoDir, diffCommand: context.diffCommand, nitPolicy: "material"`;
+do not fetch/recompute another base. The runtime also normalizes absolute paths within
+the pinned checkout and rejects paths outside it.
 Read applicable siblings' **Scope** and **Stage and run** sections for guideline
 selection, version gates and staging; use a distinct staged script path for each.
 Override their presentation/fix/verification steps with this read-only shared queue.
@@ -110,12 +115,17 @@ use action as suggestedFix, preserve source/rule dimensions and attach guideline
 coverageFile for test exceptions/evidence. Canonicalize equivalent claim keys to
 `<enclosing symbol>:<violated invariant>:<trigger>`; preserve different triggers/invariants
 even at one line. Apply matching keys to prior findings too.
+The runtime accepts summary/failure_scenario aliases from implementers, but use
+description for new candidates. Preserve rejectedFindings and validationErrors as gaps;
+do not recover raw journal output or redispatch an exhausted check to hide a gap.
+Include every validated language/test candidate in the shared queue.
 
 Dispatch the staged code-review workflow **once**, after candidate collection:
 
 ```text
 { files: reviewFiles, baseBranch: BASE, profile: PROFILE, effort: EFFORT,
-  repoDir: WT, diffCommand: context.diffCommand, reviewContextPath: contextPath,
+  repoDir: context.repoDir, diffCommand: context.diffCommand, reviewContextPath: contextPath,
+  nitPolicy: "material",
   changeNote: "PR #<n>: <title>",
   externalFindings: <normalized language/test candidates and priorFindings>,
   coveredDimensions: <["tests"] only if all applicable test rules and measured coverage
@@ -128,6 +138,9 @@ candidates before independent challenge. Do not add a language verify-only run o
 standalone test verification. Verifiers prioritize issues, batch four claims and expose
 budget overflow/missing verdicts as gaps. Post only **verified: true** findings. Include
 all unverified rules/unchallenged claims in the approval decision and user report.
+Finder/checker prompts limit nits to concrete maintenance/testing costs; avoid generating
+mechanical style and routine edge-coverage suggestions that will not be posted. Preserve
+all correctness issues and independently challenge every candidate actually returned.
 
 Keep the complete confirmed list before filtering already-posted comments. With no gaps,
 write `{complete:true,findings:<complete verified list>,unchallenged:[]}` to scratchpad and
@@ -182,7 +195,10 @@ never retry with another event. Keep coverage gaps/internal machinery in the use
 
 Give decision/review URL, one line per comment, STILL_OPEN/skipped prior findings,
 measured/unverified coverage, other gaps, refuted/unchallenged counts, chosen profile/
-effort, incremental/full scope, actual finder/verifier calls and phase durations. Never
+effort, incremental/full scope and actual finder/verifier calls. Distinguish malformed
+rejected claims from claims awaiting a verdict. Read elapsed times from completed Workflow
+metadata with scripts/workflow-metrics.js (see code-review Step 4). Phase agent spans
+exclude coordinator overhead; unavailable times are null. Never
 present unchallenged claims as confirmed or estimate billing from partial usage.
 End every run, including early stops, with exactly one final marker:
 

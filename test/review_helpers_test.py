@@ -120,9 +120,10 @@ class Repository(unittest.TestCase):
     def test_incomplete_report_preserves_complete_cache(self):
         context = self.remember()
         before = pathlib.Path(context['cachePath']).read_text()
-        result = state.save(context, {'complete': True, 'findings': [], 'unchallenged': [{'file': 'a.py'}]})
-        self.assertFalse(result['saved'])
-        self.assertEqual(pathlib.Path(context['cachePath']).read_text(), before)
+        for gap in ('unchallenged', 'rejectedFindings'):
+            result = state.save(context, {'complete': True, 'findings': [], gap: [{'file': 'a.py'}]})
+            self.assertFalse(result['saved'])
+            self.assertEqual(pathlib.Path(context['cachePath']).read_text(), before)
         with self.assertRaises(ValueError):
             state.save(context, {'complete': True, 'findings': [{'file': 'a.py', 'verified': False}]})
 

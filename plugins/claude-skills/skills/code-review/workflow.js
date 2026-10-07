@@ -10,6 +10,7 @@ export const meta = {
 // so every call below does. Angles and sweep are adapted from the built-in's max recipe.
 const MODEL = 'opus'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+// REVIEW_INPUT_RUNTIME
 
 // Verified empirically in an earlier session (see project memory): `args` has arrived
 // as a JSON-encoded STRING even when passed as a genuine object literal at the call
@@ -39,10 +40,11 @@ if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) 
 // An empty files list is never legitimate here — the skill's own preflight already
 // stops on an empty diff. Fail loud rather than silently reviewing nothing and letting
 // the caller read that as a clean pass.
-const files = parsedArgs.files
+const repoDir = typeof parsedArgs.repoDir === 'string' ? parsedArgs.repoDir.trim() : ''
+const files = Array.isArray(parsedArgs.files) ? parsedArgs.files.map(f => reviewPath(f, repoDir)) : null
 
-if (!Array.isArray(files) || files.length === 0) {
-  throw new Error('code-review workflow received no target files — verify the skill body passed a non-empty diff')
+if (!Array.isArray(files) || files.length === 0 || files.some(f => !f)) {
+  throw new Error('code-review requires non-empty target files inside repoDir; absolute paths require the checkout root')
 }
 
 const baseBranch = typeof parsedArgs.baseBranch === 'string' && parsedArgs.baseBranch.trim() ? parsedArgs.baseBranch.trim() : 'main'
@@ -58,12 +60,14 @@ if (!EFFORT_LEVELS.includes(EFFORT)) {
   throw new Error(`code-review workflow received effort ${JSON.stringify(EFFORT)} — expected one of ${EFFORT_LEVELS.join(', ')}`)
 }
 
-// Set only when reviewing a checkout other than the session's working directory (a PR worktree).
-const repoDir = typeof parsedArgs.repoDir === 'string' ? parsedArgs.repoDir.trim() : ''
+const nitInstructions = reviewNitPolicy(parsedArgs.nitPolicy)
 
 // Set by review-pr to verify findings from other checkers (golang-check, ts-check): skips
 // the finders and the sweep, and runs only the adversarial verifier on these.
 const verifyOnly = Array.isArray(parsedArgs.verifyOnly) ? parsedArgs.verifyOnly : null
+for (const key of ['verifyOnly', 'externalFindings']) {
+  if (parsedArgs[key] !== undefined && !Array.isArray(parsedArgs[key])) throw new Error(`${key} must be an array`)
+}
 const diffCommand = typeof parsedArgs.diffCommand === 'string' && parsedArgs.diffCommand.trim() ? parsedArgs.diffCommand.trim() : `git diff origin/${baseBranch}`
 
 // Inline, not a guidelines/ directory — this isn't an extensible rule set; YAGNI.
@@ -297,11 +301,11 @@ If you confirm a "nit" that actually affects behavior or correctness, set severi
 }
 
 // Bound fan-out and preserve missing verdicts as visible coverage gaps.
-const stats = { profile, finderCalls: 0, verifierCalls: 0, candidates: 0, duplicates: 0, findDurationMs: 0, sweepDurationMs: 0, verifyDurationMs: 0 }
-const started = Date.now()
+const stats = { profile, finderCalls: 0, verifierCalls: 0, candidates: 0, duplicates: 0 }
 const dimensionsUnverified = new Set()
 const unchallenged = []
 const refuted = []
+const rejectedFindings = []
 const covered = new Set(Array.isArray(parsedArgs.coveredDimensions) ? parsedArgs.coveredDimensions : [])
 // Ownership can suppress overlapping checks, never core correctness or security.
 const allowedCovered = new Set(['tests', 'comments', 'conventions'])
@@ -324,13 +328,20 @@ async function pool(items, worker) {
   }))
   return output
 }
-function validFinding(f) {
-  return f && typeof f.file === 'string' && f.file.trim() && Number.isInteger(f.line) && f.line > 0 && ['issue', 'nit'].includes(f.severity) && typeof f.description === 'string' && f.description.trim() && typeof f.suggestedFix === 'string' && f.suggestedFix.trim()
+function acceptFinding(raw, dimension, external = false) {
+  const { finding, errors } = reviewFinding(raw, repoDir, external)
+  if (errors.length) {
+    const source = dimension || finding?.dimension || 'malformed-finding'
+    dimensionsUnverified.add(source)
+    rejectedFindings.push({ finding: raw, dimension: source, validationErrors: errors, verified: false })
+    log(`${source}: rejected finding — ${errors.join('; ')}`)
+    return null
+  }
+  return { ...finding, dimension: dimension || finding.dimension || 'external' }
 }
 function deduplicate(items) {
   const unique = new Map()
   for (const f of items) {
-    if (!validFinding(f)) { dimensionsUnverified.add(f?.dimension || 'malformed-finding'); continue }
     const key = `${f.file}:${f.line}:${normalize(f.claimKey || f.description)}`
     const first = unique.get(key)
     if (!first) unique.set(key, { ...f, dimensions: [...new Set([...(f.dimensions || []), f.dimension || 'external'])] })
@@ -345,11 +356,10 @@ function deduplicate(items) {
   return [...unique.values()].sort(byPriority)
 }
 function external(items) {
-  return items.map(f => ({ ...f, dimension: f.dimension || (f.rule ? `test-check/${f.rule}` : 'external'), severity: f.severity === 'nit' || f.severity === 'info' ? 'nit' : 'issue', suggestedFix: f.suggestedFix || f.action }))
+  return items.map(f => acceptFinding(f, null, true)).filter(Boolean)
 }
 async function find() {
   phase('Find')
-  const findStarted = Date.now()
   const groups = profile === 'thorough' ? selected.map(d => [d]) : [
     selected.filter(d => d.kind === 'bug'),
     selected.filter(d => ['tests', 'comments', 'conventions'].includes(d.key)),
@@ -358,13 +368,18 @@ async function find() {
   const results = await pool(groups, async group => {
     stats.finderCalls++
     const prompt = group.length === 1 ? findPrompt(group[0]) : `Review these related angles in one source-reading pass. Read changed hunks and enclosing code once, expanding to callers as needed.\n${contextBlock()}\nAngles:\n${group.map(d => `${d.key}: ${d.prompt} ${descriptionRule(d)}`).join('\n')}\n${SHARED_RULES}\nReturn at most 8 concrete findings, each with dimension set to one supplied angle. Report equivalent claims once. Return findings: [] when clean.`
-    const result = await agent(prompt, { label: `find:${group.map(d => d.key).join('+')}`, phase: 'Find', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
+    const result = await agent(`${prompt}\nReturn repo-relative file paths. ${nitInstructions}`, { label: `find:${group.map(d => d.key).join('+')}`, phase: 'Find', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
     if (!result || !Array.isArray(result.findings)) return null
     const accepted = []
     for (const f of result.findings) {
-      const dimension = group.length === 1 ? group[0].key : f.dimension
-      if (!validFinding(f) || !group.some(d => d.key === dimension)) { for (const d of group) dimensionsUnverified.add(d.key); continue }
-      accepted.push({ ...f, dimension })
+      const dimension = group.length === 1 ? group[0].key : f?.dimension
+      const finding = acceptFinding(f, dimension)
+      if (!finding || !group.some(d => d.key === dimension)) {
+        for (const d of group) dimensionsUnverified.add(d.key)
+        if (finding) rejectedFindings.push({ finding: f, validationErrors: ['dimension outside finder group'], verified: false })
+        continue
+      }
+      accepted.push(finding)
     }
     return accepted
   })
@@ -373,27 +388,23 @@ async function find() {
     if (!r) for (const d of groups[i]) dimensionsUnverified.add(d.key)
     else candidates.push(...r)
   })
-  stats.findDurationMs = Date.now() - findStarted
   if (profile === 'thorough' || parsedArgs.sweep === true) {
     phase('Sweep')
-    const sweepStarted = Date.now()
     stats.finderCalls++
     try {
-      const result = await agent(sweepPrompt(candidates), { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
+      const result = await agent(`${sweepPrompt(candidates)}\nReturn repo-relative file paths. ${nitInstructions}`, { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
       if (!result || !Array.isArray(result.findings)) dimensionsUnverified.add('sweep')
       else for (const f of result.findings) {
-        if (validFinding(f)) candidates.push({ ...f, dimension: 'sweep' })
-        else dimensionsUnverified.add('sweep')
+        const finding = acceptFinding(f, 'sweep')
+        if (finding) candidates.push(finding)
       }
     } catch (e) { dimensionsUnverified.add('sweep'); log(`sweep: ${e.message || e}`) }
-    stats.sweepDurationMs = Date.now() - sweepStarted
   }
   return candidates
 }
 const candidates = deduplicate(verifyOnly ? external(verifyOnly) : [...await find(), ...external(Array.isArray(parsedArgs.externalFindings) ? parsedArgs.externalFindings : [])])
 stats.candidates = candidates.length
 phase('Verify')
-const verifyStarted = Date.now()
 const findings = []
 const verdictBatchSchema = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array', items: { type: 'object', required: ['id', 'refuted', 'reason'], properties: { id: { type: 'integer' }, ...VERDICT_SCHEMA.properties } } } } }
 const verified = await pool(batchesOf(candidates, 4), async (batch, index) => {
@@ -418,12 +429,12 @@ batchesOf(candidates, 4).forEach((batch, index) => {
 })
 findings.push(...unchallenged)
 findings.sort(byPriority)
-stats.verifyDurationMs = Date.now() - verifyStarted
 stats.confirmed = findings.length - unchallenged.length
-stats.durationMs = Date.now() - started
+stats.rejected = rejectedFindings.length
+// Timing belongs to Workflow metadata; sandbox clocks are deliberately unavailable.
 return {
   findings, findingCount: findings.length, dimensionsUnverified: [...dimensionsUnverified].sort(),
-  unchallenged, refuted, stats,
+  unchallenged, refuted, rejectedFindings, stats,
   dimensionsDelegated: [...covered],
   dimensionsSkipped: verifyOnly ? [] : active.filter(d => !selected.includes(d)).map(d => d.key),
 }

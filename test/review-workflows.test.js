@@ -9,16 +9,20 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 function runner(t, skill) {
   let source;
   const meta = skill === 'code-review' ? {} : guidelineMeta(path.join(PLUGIN, 'skills', skill, 'guidelines'));
-  if (skill === 'code-review') source = fs.readFileSync(path.join(PLUGIN, 'skills', skill, 'workflow.js'), 'utf8');
-  else {
+  {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-runtime-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const out = path.join(dir, 'staged.js');
-    stage(path.join(PLUGIN, 'skills', skill, 'guidelines'), path.join(PLUGIN, 'skills', skill, 'workflow.js'), out);
+    stage(skill === 'code-review' ? '-' : path.join(PLUGIN, 'skills', skill, 'guidelines'), path.join(PLUGIN, 'skills', skill, 'workflow.js'), out);
     source = fs.readFileSync(out, 'utf8');
     assert.ok(!source.includes('// GROUPED_CHECK_RUNTIME'));
   }
-  const fn = new AsyncFunction('args', 'agent', 'parallel', 'phase', 'log', source.replace('export const meta', 'const meta'));
+  // The real Workflow runtime prohibits wall clocks to keep resume deterministic.
+  class SandboxDate {
+    constructor() { throw new Error('new Date unavailable in Workflow'); }
+    static now() { throw new Error('Date.now unavailable in Workflow'); }
+  }
+  const fn = new AsyncFunction('args', 'agent', 'parallel', 'phase', 'log', 'Date', source.replace('export const meta', 'const meta'));
   const calls = [], logs = [];
   let live = 0, maximum = 0;
   return {
@@ -30,7 +34,7 @@ function runner(t, skill) {
       return fn(args, async (prompt, options) => {
         live++; maximum = Math.max(live, maximum); calls.push({ prompt, options });
         try { return await response(prompt, options); } finally { live--; }
-      }, thunks => Promise.all(thunks.map(async f => { try { return await f(); } catch { return null; } })), () => {}, m => logs.push(m));
+      }, thunks => Promise.all(thunks.map(async f => { try { return await f(); } catch { return null; } })), () => {}, m => logs.push(m), SandboxDate);
     },
   };
 }
@@ -57,6 +61,8 @@ test('a failed grouped proof retries only that rule and retains successful sibli
   assert.deepEqual(result.unverified, []);
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0].priority, 1);
+  assert.deepEqual(result.rejectedFindings, []);
+  assert.match(r.calls[1].prompt, /Correct these previous output errors: proof lineCount mismatch/);
 });
 test('malformed findings are retried once, then reported unverified', async t => {
   const r = runner(t, 'ts-check');
@@ -188,11 +194,140 @@ test('delegated test ownership avoids another test finder but retains core angle
   assert.ok(r.calls.some(c => c.prompt.includes('security: Look for injection')));
 });
 
-test('standard review can request a gap sweep and records phase durations', async t => {
+test('standard gap sweep completes with sandbox clocks denied and leaves timing to metadata', async t => {
   const r = runner(t, 'code-review');
   const result = await r.run({ files: ['a.go'], sweep: true }, () => ({ findings: [] }));
   assert.equal(result.stats.finderCalls, 4);
-  for (const key of ['findDurationMs', 'sweepDurationMs', 'verifyDurationMs']) assert.ok(result.stats[key] >= 0);
+  for (const key of ['durationMs', 'findDurationMs', 'sweepDurationMs', 'verifyDurationMs']) assert.equal(Object.hasOwn(result.stats, key), false);
+});
+
+test('absolute Go scope accepts relative findings and macOS temp aliases without retry', async t => {
+  const r = runner(t, 'golang-check');
+  const result = await r.run({ repoDir: '/private/tmp/review/wt', guidelines: [{ stem: 'errors', files: ['/tmp/review/wt/internal/client.go'] }] }, p => r.proof(p, [{
+    file: 'internal/./client.go', line: 10, symbol: 'MakeRequest', rule: 'errors',
+    severity: 'error', confidence: 'high', description: 'body read error is discarded', suggestedFix: 'return the error',
+  }]));
+  assert.equal(result.stats.checkCalls, 1);
+  assert.deepEqual(result.unverified, []);
+  assert.equal(result.findings[0].file, 'internal/client.go');
+  assert.deepEqual(result.rejectedFindings, []);
+});
+
+test('relative TS scope accepts absolute findings inside the pinned checkout', async t => {
+  const r = runner(t, 'ts-check');
+  const result = await r.run({ repoDir: '/worktree', files: ['src/a.ts'], guidelines: [{ stem: 'strong-types' }] }, p => r.proof(p, [{
+    file: '/worktree/src/a.ts', line: 3, rule: 'strong-types', description: 'unsafe decode', suggestedFix: 'validate input',
+  }]));
+  assert.equal(result.stats.checkCalls, 1);
+  assert.equal(result.findings[0].file, 'src/a.ts');
+});
+
+test('real-session test finding with relative path survives absolute scope validation', async t => {
+  const r = runner(t, 'test-check');
+  const result = await r.run({ repoDir: '/private/tmp/review/wt', verify: false,
+    sourceFiles: ['/tmp/review/wt/stock-availability/base/headless/client.go'],
+    testFiles: ['/tmp/review/wt/stock-availability/base/headless/client_test.go'],
+    guidelines: [{ stem: 'assertion-strictness' }],
+  }, p => r.proof(p, [{ file: 'stock-availability/base/headless/client_test.go', line: 376, endLine: 376,
+    symbol: 'TestMakeRequest', rule: 'assertion-strictness', severity: 'warning', confidence: 'high',
+    description: '429 test only checks a substring', rationale: 'wrong error type passes', action: 'assert the error type',
+  }]));
+  assert.equal(result.stats.checkCalls, 1);
+  assert.equal(result.findingCount, 1);
+  assert.deepEqual(result.unverified, []);
+});
+
+test('path normalization rejects checkout escapes and preserves specific errors', async t => {
+  for (const file of ['../src/a.ts', '/worktree-other/src/a.ts', '/worktree/../outside/a.ts', '/outside/src/a.ts']) {
+    const r = runner(t, 'ts-check');
+    const result = await r.run({ repoDir: '/worktree', files: ['src/a.ts'], guidelines: [{ stem: 'strong-types' }] }, p => r.proof(p, [{
+      file, line: 1, rule: 'strong-types', description: 'claim', suggestedFix: 'fix',
+    }]));
+    assert.equal(result.findingCount, 0);
+    assert.deepEqual(result.unverified, ['strong-types']);
+    assert.ok(result.rejectedFindings.every(f => f.finding.file === file));
+    assert.ok(r.logs.every(log => !log.includes('proof')));
+    assert.ok(r.logs.every(log => log.includes('file outside guideline scope')));
+  }
+});
+
+test('invalid absolute scopes without repoDir are explicit gaps without model calls', async t => {
+  const r = runner(t, 'ts-check');
+  const result = await r.run({ files: ['/worktree/src/a.ts'], guidelines: [{ stem: 'strong-types' }] }, () => { throw new Error('must not dispatch'); });
+  assert.equal(result.stats.checkCalls, 0);
+  assert.deepEqual(result.unverified, ['strong-types']);
+  assert.match(r.logs[0], /absolute scope without repoDir/);
+});
+
+test('external implementer summary and trigger reach independent challenge', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ repoDir: '/worktree', files: ['app/handler.go'], verifyOnly: [{
+    file: '/worktree/app/handler.go', line: 1000, severity: 'issue', rule: 'candidate-from-implementer',
+    summary: 'Disabled draft is served', failure_scenario: 'Storefront disabled after assignment', suggestedFix: 'check enabled before serving',
+  }] }, p => {
+    assert.match(p, /Claim: Disabled draft is served\nTrigger: Storefront disabled after assignment/);
+    assert.match(p, /File: app\/handler.go/);
+    return { verdicts: [{ id: 0, refuted: false, reason: 'disabled draft request demonstrates it' }] };
+  });
+  assert.equal(result.stats.verifierCalls, 1);
+  assert.equal(result.stats.confirmed, 1);
+  assert.deepEqual(result.dimensionsUnverified, []);
+  assert.deepEqual(result.rejectedFindings, []);
+});
+
+test('malformed external claims retain their details and stay distinct from unchallenged', async t => {
+  const r = runner(t, 'code-review');
+  const malformed = finding('disabled draft', { file: '../outside.go', suggestedFix: '', dimension: 'implementer' });
+  const result = await r.run({ files: ['a.go'], verifyOnly: [malformed, null] }, () => { throw new Error('must not challenge invalid input'); });
+  assert.equal(result.stats.verifierCalls, 0);
+  assert.equal(result.rejectedFindings.length, 2);
+  assert.equal(result.rejectedFindings[0].finding.description, 'disabled draft');
+  assert.ok(result.rejectedFindings[0].validationErrors.some(e => e.includes('suggestedFix')));
+  assert.ok(result.dimensionsUnverified.includes('implementer'));
+  assert.deepEqual(result.unchallenged, []);
+  assert.equal(result.stats.rejected, 2);
+});
+
+test('absolute and relative claim paths deduplicate before challenge', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ repoDir: '/worktree', files: ['a.go'], verifyOnly: [finding('race'), finding('race', { file: '/worktree/./a.go' })] }, () => ({ verdicts: [{ id: 0, refuted: false, reason: 'race reproduced' }] }));
+  assert.equal(result.stats.candidates, 1);
+  assert.equal(result.stats.duplicates, 1);
+  assert.equal(result.stats.verifierCalls, 1);
+});
+
+test('material nit policy never drops reported issues or existing claims before challenge', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], nitPolicy: 'material', verifyOnly: [
+    ...Array.from({ length: 5 }, (_, i) => finding(`issue ${i}`, { line: i + 1 })),
+    ...Array.from({ length: 5 }, (_, i) => finding(`existing nit ${i}`, { severity: 'nit', line: i + 6 })),
+  ] }, () => ({ verdicts: Array.from({ length: 4 }, (_, id) => ({ id, refuted: false, reason: 'proven' })) }));
+  assert.equal(result.stats.confirmed, 10);
+  assert.deepEqual(result.unchallenged, []);
+  await assert.rejects(r.run({ files: ['a.go'], nitPolicy: 'typo' }, () => null), /nitPolicy/);
+});
+
+test('a corrected checker retry leaves no rejected claim blocking a complete result', async t => {
+  const r = runner(t, 'ts-check');
+  let attempt = 0;
+  const result = await r.run({ files: ['a.ts'], guidelines: [{ stem: 'strong-types' }] }, p => r.proof(p, [{
+    file: attempt++ === 0 ? 'outside.ts' : 'a.ts', line: 1, rule: 'strong-types', description: 'unsafe parse', suggestedFix: 'validate',
+  }]));
+  assert.equal(result.stats.checkCalls, 2);
+  assert.equal(result.findingCount, 1);
+  assert.deepEqual(result.unverified, []);
+  assert.deepEqual(result.rejectedFindings, []);
+  assert.match(r.calls[1].prompt, /file outside guideline scope/);
+});
+
+test('finder absolute paths normalize without losing independent verification', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ repoDir: '/worktree', files: ['a.go'], profile: 'fast' }, (p, o) => {
+    if (o.phase === 'Find') return { findings: o.label.includes('line-scan') ? [finding('race', { file: '/worktree/a.go', dimension: 'line-scan' })] : [] };
+    return { verdicts: [{ id: 0, refuted: false, reason: 'race reproduced' }] };
+  });
+  assert.equal(result.stats.confirmed, 1);
+  assert.equal(result.findings[0].file, 'a.go');
 });
 
 test('language checkers use the pinned PR checkout and delta command', async t => {
