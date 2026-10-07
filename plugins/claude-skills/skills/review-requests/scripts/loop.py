@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Watch the review-request channel: one pass every INTERVAL minutes, until something
-needs the user.
+"""Watch review requests through the Claude Slack connector, with idle backoff.
 
-Each pass finishes the reviews that are done, checks the reviewed PRs for new pushes
-(watch-prs.py), reads the channel and starts reviews for new requests and re-reviews for
-PRs that changed. Slack goes through slack.py, short headless sessions: one read per
-pass, and one post when there are replies. Everything else is plain Python, so the
-session that started the loop sees nothing until it exits.
+Local completion/queue checks run every 30 seconds; GitHub watches every minute.
+Connector reads use INTERVAL, backing off during inactivity. Persist queued requests
+before advancing the Slack cursor, so a full queue never repeatedly reads old messages.
+Posts are batched, and only run when replies exist.
 
 One line per pass goes to STATE/log. The loop exits, printing what happened, when the
 user has to know or act:
@@ -33,6 +31,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 import slack
@@ -43,7 +42,10 @@ MAX_RUNNING = 2
 GRACE_SECONDS = 600
 MAX_REVIEWS = 2
 MAX_POST_ATTEMPTS = 2
+MAX_POST_BATCH = 8
 MAX_SLACK_ERRORS = 3
+TICK_SECONDS = 30
+WATCH_SECONDS = 60
 PR_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
 
 REPLIES = {
@@ -84,6 +86,13 @@ def last_line(text):
     lines = text.strip().splitlines()
 
     return lines[-1] if lines else ""
+
+
+def write_json(path, value):
+    with tempfile.NamedTemporaryFile("w", prefix=".queue-", dir=path.parent, delete=False) as f:
+        json.dump(value, f)
+        temporary = f.name
+    os.replace(temporary, path)
 
 
 def forget(ts, keep):
@@ -152,25 +161,21 @@ class Pass:
         self.cache_reads = 0
         self.cache_writes = 0
         self.cache_ttls = set()
+        self.slack_read = False
+        self.new_requests = 0
 
     def slack(self, call, *args):
         """Runs slack.read or slack.post, once more after 30s if the connector is not up yet."""
-        reply = call(self.config["channel"], *args)
-        if reply["status"] == "unavailable":
-            time.sleep(30)
+        for attempt in range(2):
             reply = call(self.config["channel"], *args)
-
-        usage = reply.get("usage", {})
-        self.tokens += sum(
-            usage.get(key) or 0
-            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
-        )
-
-        self.cache_reads += usage.get("cache_read_input_tokens") or 0
-        self.cache_writes += usage.get("cache_creation_input_tokens") or 0
-        self.cache_ttls |= cache_ttls(usage)
-
-        return reply
+            usage = reply.get("usage", {})
+            self.tokens += sum(usage.get(key) or 0 for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
+            self.cache_reads += usage.get("cache_read_input_tokens") or 0
+            self.cache_writes += usage.get("cache_creation_input_tokens") or 0
+            self.cache_ttls |= cache_ttls(usage)
+            if reply["status"] != "unavailable" or attempt:
+                return reply
+            time.sleep(30)
 
     def usage(self):
         return f"[{token_summary(self.tokens, self.cache_reads, self.cache_writes, self.cache_ttls)}]"
@@ -178,7 +183,7 @@ class Pass:
     def post_outbox(self):
         """Posts the queued replies. One still unconfirmed after MAX_POST_ATTEMPTS moves to
         outbox/failed, so a post that went out without a confirmation is not repeated."""
-        posts = outbox_posts()
+        posts = outbox_posts()[:MAX_POST_BATCH]
         if not posts:
             return
 
@@ -218,7 +223,7 @@ class Pass:
 
             result = report.get("result") or ""
 
-            match = re.search(r"REVIEW_RESULT:\s*(\w+)", result)
+            match = re.search(r"^REVIEW_RESULT:\s*(\w+)\s*$", result.strip().splitlines()[-1] if result.strip() else "")
             outcome = match.group(1) if match and match.group(1) in REPLIES else "error"
 
             if outcome == "error":
@@ -320,6 +325,7 @@ class Pass:
         (STATE / f"{ts}.url").write_text(f"{url}\n")
         (STATE / f"{ts}.head").write_text(f"{info['headRefOid']}\n")
         (STATE / f"{ts}.pending").unlink(missing_ok=True)
+        (STATE / f"{ts}.queued").unlink(missing_ok=True)
 
         subprocess.run(
             ["bash", "-c", LAUNCH, "launch", str(STATE / ts), str(clone), str(SCRIPTS / "run-review.py"), url, *flag],
@@ -332,7 +338,46 @@ class Pass:
 
         return True
 
-    def run(self):
+    def discover(self, messages, me):
+        """Persist just PR URLs/labels before advancing since; no message prose."""
+        for message in sorted(messages, key=lambda m: float(m["ts"])):
+            urls = list(dict.fromkeys(m.group(0) for u in message["pr_urls"] if (m := PR_URL.match(u))))
+            if message["user"] == me or not urls:
+                continue
+            ts = message["ts"]
+            keys = [ts] + [f"{ts}~{n}" for n in range(2, len(urls) + 1)]
+            fresh = not any(any(STATE.glob(f"{key}.*")) for key in keys)
+            for key, url in zip(keys, urls):
+                if any(STATE.glob(f"{key}.*")):
+                    continue
+                label = "{1}#{2}".format(*PR_URL.match(url).groups()) if len(urls) > 1 else ""
+                write_json(STATE / f"{key}.queued", {"url": url, "label": label, "ack": fresh})
+                self.new_requests += 1
+
+    def start_queued(self, slots):
+        for path in sorted(STATE.glob("*.queued")):
+            if slots <= 0:
+                break
+            request = json.loads(path.read_text())
+            ts = path.stem
+            if not self.start(ts, request["url"], [], "reviewing..." if request["ack"] else None, request["label"]):
+                continue
+            if (STATE / f"{ts}.url").exists():
+                slots -= 1
+                # One acknowledgement per multi-PR message, including when requests
+                # wait across several connector reads or a loop restart.
+                for sibling in STATE.glob(f"{thread_of(ts)}*.queued"):
+                    if thread_of(sibling.stem) != thread_of(ts):
+                        continue
+                    data = json.loads(sibling.read_text())
+                    data["ack"] = False
+                    write_json(sibling, data)
+        waiting = len(list(STATE.glob("*.queued")))
+        if waiting:
+            self.notes.append(f"{waiting} request(s) waiting")
+        return slots
+
+    def run(self, read_channel=True, watch=True):
         since = STATE / "since"
         if not since.exists():
             since.write_text(f"{time.time():.6f}\n")
@@ -340,7 +385,26 @@ class Pass:
             return
 
         self.finish_reviews()
-        rereviews = self.watch_prs()
+        # Deliver completed reviews before a connector read can block this pass.
+        # Retry an unconfirmed post only on the next pass, never twice in one tick.
+        posted = bool(outbox_posts())
+        if posted:
+            self.post_outbox()
+        rereviews = self.watch_prs() if watch else []
+
+        if read_channel:
+            self.read_requests(since)
+
+        slots = MAX_RUNNING - len(list(STATE.glob("*.tmp")))
+        slots = self.start_queued(slots)
+        for ts, url, flag in rereviews:
+            if slots > 0 and self.start(ts, url, flag, labeled(ts, "reviewing...")) and (STATE / f"{ts}.url").exists():
+                slots -= 1
+        if not posted:
+            self.post_outbox()
+
+    def read_requests(self, since):
+        self.slack_read = True
 
         read_at = f"{time.time():.6f}"
         reply = self.slack(slack.read, read(since), STATE, not self.config["me"])
@@ -356,7 +420,6 @@ class Pass:
 
             errors.write_text(f"{count}\n")
             self.notes.append(f"Slack read failed, retried next pass: {reply['detail']}")
-            self.post_outbox()
             return
 
         errors.unlink(missing_ok=True)
@@ -364,43 +427,34 @@ class Pass:
         me = self.config["me"] or reply["me"]
         if not me:
             raise Stop("no Slack user ID: set REVIEW_REQUESTS_USER_ID in ~/.claude/settings.json")
+        self.config["me"] = me  # Connector discovery is needed only once per loop.
+        self.discover(reply["messages"], me)
+        since.write_text(f"{read_at}\n")
 
-        requests = []
-        for message in sorted(reply["messages"], key=lambda m: float(m["ts"])):
-            urls = list(dict.fromkeys(m.group(0) for u in message["pr_urls"] if (m := PR_URL.match(u))))
-            if message["user"] == me or not urls:
-                continue
 
-            ts = message["ts"]
-            keys = [ts] + [f"{ts}~{n}" for n in range(2, len(urls) + 1)]
-            todo = [(key, url) for key, url in zip(keys, urls) if not any(STATE.glob(f"{key}.*"))]
-            if todo:
-                requests.append((len(todo) == len(urls), len(urls) > 1, todo))
+class Schedule:
+    """Separate cheap local ticks from expensive connector reads."""
+    def __init__(self, config):
+        self.base = config["interval"] * 60
+        self.maximum = config["max_idle_interval"] * 60
+        self.delay = self.base
+        self.read_at = 0
+        self.watch_at = 0
 
-        slots = MAX_RUNNING - len(list(STATE.glob("*.tmp")))
-        waiting = 0
-        for fresh, several, todo in requests:
-            ack = "reviewing..." if fresh else None
-            for key, url in todo:
-                label = "{1}#{2}".format(*PR_URL.match(url).groups()) if several else ""
-                if slots <= 0 or not self.start(key, url, [], ack, label):
-                    waiting += 1
-                    continue
+    def due(self, now):
+        return now >= self.read_at, now >= self.watch_at
 
-                if (STATE / f"{key}.url").exists():
-                    slots -= 1
-                    ack = None
-
-        for ts, url, flag in rereviews:
-            if slots > 0 and self.start(ts, url, flag, labeled(ts, "reviewing...")) and (STATE / f"{ts}.url").exists():
-                slots -= 1
-
-        if waiting:
-            self.notes.append(f"{waiting} request(s) waiting")
-        else:
-            since.write_text(f"{read_at}\n")
-
-        self.post_outbox()
+    def advance(self, now, current, watched, busy):
+        if watched:
+            self.watch_at = now + WATCH_SECONDS
+        active = busy or current.new_requests or any(n.startswith(("started ", "head_moved ", "approved ", "commented ")) for n in current.notes)
+        if active or current.alerts or (STATE / "slack-errors").exists():
+            self.delay = self.base
+            self.read_at = min(self.read_at or now + self.base, now + self.base)
+        elif current.slack_read:
+            self.delay = min(self.maximum, self.delay * 2)
+        if current.slack_read:
+            self.read_at = now + self.delay
 
 
 def load_config():
@@ -411,11 +465,15 @@ def load_config():
     interval = os.environ.get("REVIEW_REQUESTS_INTERVAL_MINUTES", "5")
     if not interval.isdigit() or int(interval) < 1:
         raise Stop("REVIEW_REQUESTS_INTERVAL_MINUTES must be a whole number of minutes, 1 or more")
+    maximum = os.environ.get("REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES", str(max(30, int(interval))))
+    if not maximum.isdigit() or int(maximum) < int(interval):
+        raise Stop("REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES must be a whole number >= INTERVAL")
 
     return {
         "channel": channel,
         "me": os.environ.get("REVIEW_REQUESTS_USER_ID", ""),
         "interval": int(interval),
+        "max_idle_interval": int(maximum),
         "repos_dir": pathlib.Path(os.environ.get("REVIEW_REQUESTS_REPOS_DIR") or pathlib.Path.home() / "repos").expanduser(),
     }
 
@@ -441,23 +499,28 @@ def main():
         sys.exit(3)
 
     print(f"watching every {config['interval']} min, log: {STATE / 'log'}", flush=True)
+    schedule = Schedule(config)
 
     while True:
         current = Pass(config)
+        read_channel, watch = schedule.due(time.monotonic())
         try:
-            current.run()
+            current.run(read_channel, watch)
         except Stop as stop:
             log(f"stopped: {stop}")
             print(*current.alerts, stop, sep="\n")
             sys.exit(2)
 
-        log(f"{'; '.join(current.notes + current.alerts) or 'idle'} {current.usage()}")
+        busy = bool(list(STATE.glob("*.tmp")) or list(STATE.glob("*.queued")))
+        schedule.advance(time.monotonic(), current, watch, busy)
+        if current.slack_read or current.notes or current.alerts or current.tokens:
+            log(f"{'; '.join(current.notes + current.alerts) or 'idle'} {current.usage()} next Slack read in {max(0, int(schedule.read_at - time.monotonic()))}s")
 
         if current.alerts:
             print(*current.alerts, sep="\n")
             sys.exit(0)
 
-        time.sleep(config["interval"] * 60)
+        time.sleep(TICK_SECONDS)
 
 
 if __name__ == "__main__":

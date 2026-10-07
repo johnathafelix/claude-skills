@@ -38,7 +38,8 @@ Review the current branch's changes, committed or not, against its PR base:
 ```bash
 BASE_BRANCH=$(gh pr view --json baseRefName --jq '.baseRefName' 2>/dev/null || echo main)
 git fetch origin "$BASE_BRANCH"
-git diff "origin/$BASE_BRANCH" --name-only --diff-filter=ACMD
+MERGE_BASE=$(git merge-base "origin/$BASE_BRANCH" HEAD)
+git diff "$MERGE_BASE" --no-renames --name-only --diff-filter=ACMD
 git ls-files --others --exclude-standard
 ```
 
@@ -46,7 +47,9 @@ Dedupe the two lists into `files` — the union matters, because a brand-new fil
 untracked and `--diff-filter=ACMD` alone misses it. If `files` is empty, report that there
 is nothing to review and stop.
 
-Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT }`.
+Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT,
+diffCommand: "git diff <MERGE_BASE>" }`, substituting the pinned merge-base SHA. This
+includes working-tree changes without reviewing unrelated commits added to the base.
 
 ## Step 2b — PR mode (URL given)
 
@@ -68,7 +71,7 @@ never touched.
 
    `pull/<n>/head` also covers PRs opened from forks. If the branch or worktree already
    exists from an earlier interrupted run, run the cleanup in step 6 first, then retry.
-4. **Files.** `git -C "$WT" diff --name-only --diff-filter=ACMD "origin/$BASE...HEAD"`.
+4. **Files.** `git -C "$WT" diff --no-renames --name-only --diff-filter=ACMD "origin/$BASE...HEAD"`.
    Three dots: only the PR's own changes, not what landed on the base since it branched.
    Empty → report nothing to review, clean up, and stop. If `STATE` is `MERGED`, say why:
    the PR's commits are already in `origin/<BASE>`, so there is no diff left to review.
@@ -105,9 +108,11 @@ notification, then read `{ findings, findingCount, dimensionsUnverified, unchall
 ## Step 4 — Report
 
 Open with one line: the target (local changes vs `origin/<base>`, or `<PR URL>` @
-`<HEAD_SHA short>`), the effort, and the finding count.
+`<HEAD_SHA short>`), the effort, and the confirmed count (`stats.confirmed`). Report
+unchallenged claims separately; `findingCount` also includes them.
 
-Then every finding, sorted file → line (the workflow returns them pre-sorted):
+Then confirmed (`verified: true`) findings, issues before nits, sorted file → line
+within each severity (the workflow returns them pre-sorted):
 
 ```
 N. `file:line` [dimension · severity]
@@ -115,7 +120,8 @@ N. `file:line` [dimension · severity]
    Fix:  <suggestedFix>
 ```
 
-In PR mode, paths are relative to the repo root, not to the worktree. Equivalent claims are deduplicated before verification; distinct defects at the same
+In PR mode, paths are relative to the repo root, not to the worktree. Equivalent claims
+use a canonical symbol/invariant/trigger claimKey and are deduplicated before verification; distinct defects at the same
 line remain separate. Each finding carries its originating dimensions. `severity` is `issue` or `nit` (no effect on
 behavior or correctness); list issues before nits.
 
@@ -123,6 +129,6 @@ If `dimensionsUnverified` is non-empty, list those angles under **Not verified**
 plainly that an unverified angle is not a clean pass. Always report `unchallenged` claims (including budget overflow), refutation counts and
 `dimensionsSkipped` for the selected profile. With zero findings and no gaps, say the
 review is clean for that profile, not for omitted dimensions. Workflow stats report
-actual finder/verifier call counts and duration.
+actual finder/verifier call counts, confirmed count and find/sweep/verify durations.
 
 End there. Do not offer a fix plan or start fixing.

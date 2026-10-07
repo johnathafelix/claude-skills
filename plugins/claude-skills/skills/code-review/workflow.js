@@ -179,7 +179,7 @@ const FINDINGS_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['file', 'line', 'severity', 'description', 'suggestedFix'],
+        required: ['file', 'line', 'severity', 'description', 'suggestedFix', 'claimKey'],
         properties: {
           file: { type: 'string' },
           line: { type: 'integer' },
@@ -222,6 +222,7 @@ function contextBlock() {
 ${fileList}
 
 What changed: ${changeNote || 'no change note provided — review the files as given'}
+${parsedArgs.reviewContextPath ? `Review scope and previous complete review: ${parsedArgs.reviewContextPath}. If incremental, review the new delta, search callers/callees affected by changed symbols, and expand into unchanged PR functions where a changed contract or dependency can alter behavior. Recheck prior claims independently; do not assume an old finding is still true. The fullDiffCommand in that context is available when intent or dependency scope is unclear.` : ''}
 ${planPath ? `\nImplementation plan (consult the relevant section when intent is ambiguous): ${planPath}` : ''}
 ${parsedArgs.changeManifestPath ? `Task manifest: ${parsedArgs.changeManifestPath}. Read its per-file patches. They are authoritative, including additions, deletions and pre-existing dirty baselines; do not rediscover a branch-wide diff.` : ''}`
 }
@@ -233,7 +234,7 @@ function descriptionRule(dim) {
 }
 
 const SHARED_RULES = `- If a task manifest is supplied, read its patches instead of the branch diff. Otherwise read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
-- Keep distinct defects separate, even on the same line. claimKey may name a specific violated invariant to deduplicate equivalent claims across angles.
+- Keep distinct defects separate, even on the same line. Set claimKey to "<enclosing symbol>:<violated invariant>:<trigger>". Use code identifiers and concrete states, not angle names, severity, suggested fixes or prose wording. Equivalent claims must use the same key; different triggers/invariants must use different keys.
 - Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
 - \`line\` is the 1-based line number in the file as it exists now in the code under review.
 - \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.
@@ -296,7 +297,7 @@ If you confirm a "nit" that actually affects behavior or correctness, set severi
 }
 
 // Bound fan-out and preserve missing verdicts as visible coverage gaps.
-const stats = { profile, finderCalls: 0, verifierCalls: 0, candidates: 0, duplicates: 0 }
+const stats = { profile, finderCalls: 0, verifierCalls: 0, candidates: 0, duplicates: 0, findDurationMs: 0, sweepDurationMs: 0, verifyDurationMs: 0 }
 const started = Date.now()
 const dimensionsUnverified = new Set()
 const unchallenged = []
@@ -309,7 +310,8 @@ const active = DIMENSIONS.filter(d => !covered.has(d.key))
 const fastKeys = new Set(['line-scan', 'removed-behavior', 'cross-file', 'language-pitfalls', 'wrapper-proxy', 'error-handling', 'type-invariants', 'security', 'tests'])
 const selected = profile === 'fast' ? active.filter(d => fastKeys.has(d.key)) : active
 const batchesOf = (items, count) => Array.from({ length: Math.ceil(items.length / count) }, (_, i) => items.slice(i * count, (i + 1) * count))
-const normalize = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+const normalize = value => String(value || '').replace(/[–—―]/g, '-').replace(/→/g, '->').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()
+const byPriority = (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.file.localeCompare(b.file) || a.line - b.line
 async function pool(items, worker) {
   let next = 0
   const output = new Array(items.length).fill(null)
@@ -331,20 +333,23 @@ function deduplicate(items) {
     if (!validFinding(f)) { dimensionsUnverified.add(f?.dimension || 'malformed-finding'); continue }
     const key = `${f.file}:${f.line}:${normalize(f.claimKey || f.description)}`
     const first = unique.get(key)
-    if (!first) unique.set(key, { ...f, dimensions: [f.dimension || 'external'] })
+    if (!first) unique.set(key, { ...f, dimensions: [...new Set([...(f.dimensions || []), f.dimension || 'external'])] })
     else {
       stats.duplicates++
       first.severity = higherSeverity(first.severity, f.severity)
-      first.dimensions = [...new Set([...first.dimensions, f.dimension || 'external'])]
+      first.dimensions = [...new Set([...first.dimensions, ...(f.dimensions || []), f.dimension || 'external'])]
+      // Keep all proof inputs when equivalent claims come from different checkers.
+      first.evidence = [...(first.evidence || []), ...(f.evidence || []), ...[f.guidelinePath, f.coverageFile].filter(Boolean)]
     }
   }
-  return [...unique.values()].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
+  return [...unique.values()].sort(byPriority)
 }
 function external(items) {
   return items.map(f => ({ ...f, dimension: f.dimension || (f.rule ? `test-check/${f.rule}` : 'external'), severity: f.severity === 'nit' || f.severity === 'info' ? 'nit' : 'issue', suggestedFix: f.suggestedFix || f.action }))
 }
 async function find() {
   phase('Find')
+  const findStarted = Date.now()
   const groups = profile === 'thorough' ? selected.map(d => [d]) : [
     selected.filter(d => d.kind === 'bug'),
     selected.filter(d => ['tests', 'comments', 'conventions'].includes(d.key)),
@@ -368,8 +373,10 @@ async function find() {
     if (!r) for (const d of groups[i]) dimensionsUnverified.add(d.key)
     else candidates.push(...r)
   })
-  if (profile === 'thorough') {
+  stats.findDurationMs = Date.now() - findStarted
+  if (profile === 'thorough' || parsedArgs.sweep === true) {
     phase('Sweep')
+    const sweepStarted = Date.now()
     stats.finderCalls++
     try {
       const result = await agent(sweepPrompt(candidates), { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
@@ -379,12 +386,14 @@ async function find() {
         else dimensionsUnverified.add('sweep')
       }
     } catch (e) { dimensionsUnverified.add('sweep'); log(`sweep: ${e.message || e}`) }
+    stats.sweepDurationMs = Date.now() - sweepStarted
   }
   return candidates
 }
 const candidates = deduplicate(verifyOnly ? external(verifyOnly) : [...await find(), ...external(Array.isArray(parsedArgs.externalFindings) ? parsedArgs.externalFindings : [])])
 stats.candidates = candidates.length
 phase('Verify')
+const verifyStarted = Date.now()
 const findings = []
 const verdictBatchSchema = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array', items: { type: 'object', required: ['id', 'refuted', 'reason'], properties: { id: { type: 'integer' }, ...VERDICT_SCHEMA.properties } } } } }
 const verified = await pool(batchesOf(candidates, 4), async (batch, index) => {
@@ -392,7 +401,7 @@ const verified = await pool(batchesOf(candidates, 4), async (batch, index) => {
   stats.verifierCalls++
   return await agent(`Independently challenge this batch. Read shared context once, but return exactly one verdict for EACH id. Do not assume agreement with the finder. For test claims read the applicable test-check guideline (if provided) and honor its exceptions.\n${batch.map((f, id) => {
     const dim = DIMENSIONS.find(d => d.key === f.dimension) || { key: f.dimension, label: f.dimensionLabel || f.dimension }
-    return `ID ${id}\n${verifyPrompt(f, dim)}${f.guidelinePath ? `\nGuideline: ${f.guidelinePath}` : ''}${f.coverageFile ? `\nCoverage: ${f.coverageFile}` : ''}`
+    return `ID ${id}\n${verifyPrompt(f, dim)}${f.guidelinePath ? `\nGuideline: ${f.guidelinePath}` : ''}${f.coverageFile ? `\nCoverage: ${f.coverageFile}` : ''}${f.evidence?.length ? `\nAdditional evidence inputs: ${JSON.stringify(f.evidence)}` : ''}`
   }).join('\n\n')}`, { label: `verify:batch:${index}`, phase: 'Verify', model: MODEL, effort: EFFORT, schema: verdictBatchSchema })
 })
 batchesOf(candidates, 4).forEach((batch, index) => {
@@ -404,11 +413,13 @@ batchesOf(candidates, 4).forEach((batch, index) => {
       unchallenged.push({ ...f, verified: false, verificationReason: index >= 8 ? 'verifier budget exhausted' : 'missing or malformed verdict' })
       for (const dimension of f.dimensions) dimensionsUnverified.add(dimension)
     } else if (v.refuted) refuted.push({ ...f, refutedReason: v.reason })
-    else findings.push({ ...f, severity: higherSeverity(f.severity, v.severity || f.severity), verified: true })
+    else findings.push({ ...f, severity: higherSeverity(f.severity, v.severity || f.severity), verified: true, verificationReason: v.reason })
   }
 })
 findings.push(...unchallenged)
-findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
+findings.sort(byPriority)
+stats.verifyDurationMs = Date.now() - verifyStarted
+stats.confirmed = findings.length - unchallenged.length
 stats.durationMs = Date.now() - started
 return {
   findings, findingCount: findings.length, dimensionsUnverified: [...dimensionsUnverified].sort(),

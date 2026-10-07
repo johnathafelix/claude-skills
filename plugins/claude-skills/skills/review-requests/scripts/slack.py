@@ -21,12 +21,13 @@ Run from `cwd` so no project's CLAUDE.md loads, and with hooks off so none of th
 user's hooks run (or write files) in the session.
 """
 import json
+import os
 import re
 import subprocess
 
 READ = "mcp__claude_ai_Slack__slack_read_channel"
 SEND = "mcp__claude_ai_Slack__slack_send_message"
-TIMEOUT_SECONDS = 10 * 60
+TIMEOUT_SECONDS = 3 * 60
 CURSOR = re.compile(r"cursor: `([^`]+)`")
 MESSAGE = re.compile(r"^=== Message from .*?\(([A-Z0-9]+)\) at [^\n]*===[ \t]*\nMessage TS: (\d+\.\d+)\n", re.M)
 PR_URL = re.compile(r"https://github\.com/[^/\s|>]+/[^/\s|>]+/pull/\d+")
@@ -65,7 +66,8 @@ LOAD_STEP = """1. Call ToolSearch with query "select:{tool}". If the tool is mis
    connecting, or asks to authenticate, stop and answer status "unavailable" with the
    reason in detail."""
 
-STATUS_STEP = """Any Slack call fails → status "error", detail = the error. Otherwise status "ok"."""
+STATUS_STEP = """A failed call means status "error" with detail. Otherwise status "ok".
+Return minimal schema JSON. No message summaries, commentary or extra tool calls."""
 
 READ_PROMPT = LOAD_STEP + """
 2. Call slack_read_channel with channel_id "{channel}", oldest "{oldest}", limit 100,
@@ -94,6 +96,7 @@ def failed(status, detail):
 
 
 def run(tool, schema, prompt, cwd):
+    env = {**os.environ, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "1024"}
     try:
         session = subprocess.run(
             [
@@ -104,7 +107,8 @@ def run(tool, schema, prompt, cwd):
                 "--permission-mode", "dontAsk",
                 "--permission-prompts", "none",
                 "--disable-slash-commands",
-                "--settings", json.dumps({"disableAllHooks": True}),
+                "--setting-sources", "user",
+                "--settings", json.dumps({"disableAllHooks": True, "autoMemoryEnabled": False}),
                 "--no-session-persistence",
                 "--system-prompt", "You relay Slack tool calls for a script and answer only in the requested JSON.",
                 "--json-schema", json.dumps(schema),
@@ -116,6 +120,7 @@ def run(tool, schema, prompt, cwd):
             text=True,
             timeout=TIMEOUT_SECONDS,
             cwd=cwd,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return failed("error", "headless Slack session timed out")
@@ -133,7 +138,7 @@ def run(tool, schema, prompt, cwd):
 
     reply = result.get("structured_output")
     if not isinstance(reply, dict):
-        return failed("error", f"no structured reply: {str(result.get('result'))[-300:]}")
+        return {**failed("error", f"no structured reply: {str(result.get('result'))[-300:]}"), "usage": result.get("usage", {})}
 
     return {**failed(reply["status"], ""), **reply, "usage": result.get("usage", {}), "events": events}
 

@@ -1,20 +1,20 @@
 ---
 name: review-requests
-description: Watch a Slack channel for teammates' PR review requests and review each one with review-pr — replies "reviewing..." in the thread, runs review-pr in its own headless Claude Code session (at most 2 at a time), then replies with the outcome. Keeps watching each reviewed PR: re-reviews it once a new push has sat for 10 minutes, up to 2 reviews per PR; the 2nd review always approves, and every later push is approved without a review. Stops when the PR is merged or closed. Runs as a background Python loop (every 5 minutes, configurable) that reaches Slack through short headless sessions, so this session's context does not grow while it watches. State lives in ~/.claude/review-requests, so a restarted session carries on. Uses the Slack connector already in Claude Code; only picks up messages posted after the watch started. Use when the user invokes /claude-skills:review-requests or asks to watch Slack for review requests.
+description: "Watch Slack for teammates' PR review requests through the Claude connector. Runs at most two grouped/incremental reviews, posts thread outcomes, and watches new pushes. Haiku connector calls back off when idle; local completion checks stay frequent. Invoke once to start the session's background watch."
 argument-hint: ""
 ---
 
 # Review requests
 
-Starts the watch: a background Python loop that runs one pass every `INTERVAL` minutes.
+Starts the watch: a background Python loop with independent local/connector schedules.
 Invoke it once:
 
 ```
 /claude-skills:review-requests
 ```
 
-Each pass finishes the reviews that are done, checks the reviewed PRs for new pushes,
-then starts reviews for new requests and re-reviews for PRs that changed. All of it
+Local completion/queue checks run every 30 seconds; GitHub watches run every minute.
+Slack reads start at INTERVAL and back off when idle. All of it
 runs outside this session: Python for the logic, a short headless Claude Code session
 (haiku, Slack tools only) for each Slack read or post, and a headless session per
 review. This session hears from the loop only when it exits.
@@ -33,9 +33,15 @@ approval to reply in the channel under their account, and to post reviews throug
   user's Slack ID, used only to skip their own messages. Unset, the headless Slack
   session reads it from the connector.
 - **Interval (optional):** `REVIEW_REQUESTS_INTERVAL_MINUTES`, a whole number of
-  minutes, 1 or more. Default 5.
+  minutes, 1 or more. Default 5. Idle reads double their interval, up to
+  REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES (default 30, at least INTERVAL). New
+  requests can wait up to that idle interval; review completion replies still run on
+  the 30-second local schedule. Set both intervals equal to disable idle backoff.
 - **Review effort (optional):** `REVIEW_PR_EFFORT` — `low`, `medium`, `high`, `xhigh`
-  or `max`. Default `high`. The review sessions inherit it, and `review-pr` reads it.
+  or `max`. Default medium (high for thorough). REVIEW_PR_PROFILE defaults to standard;
+  fast and thorough are optional. REVIEW_PR_COORDINATOR_MODEL defaults to sonnet;
+  checker/reviewer/challenger agents remain opus. Review sessions inherit these values.
+  Coverage/install limits and artifact caches are documented in review-pr.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
   cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else
   `~/repos`.
@@ -116,7 +122,11 @@ are keyed `<ts>~2`, `<ts>~3`, ….
    "reviewing..." is posted once per request (and again on a re-review, never on a
    retry); then
    `scripts/run-review.py` runs `/claude-skills:review-pr` in its own headless session,
-   detached from the loop. `since` moves forward once no new request is left waiting.
+   detached from the loop, loading the plugin containing the script directly. Queued
+   requests persist as <key>.queued before since advances after a complete Slack read.
+   They start as slots free, without another channel read. Re-reviews use the previous
+   complete review's cache and independently recheck prior findings; incompatible inputs
+   trigger a full review.
    With several PRs, every reply after "reviewing..." starts with the PR's
    `<repo>#<number>`, e.g. `commerce-scs#206: left some comments`.
 
@@ -127,3 +137,8 @@ after 2 tries so an unconfirmed post is never repeated. A failed Slack read neve
 Python parses their raw results itself and checks that every page was fetched. The
 session that reads the channel cannot post, and the one that posts never
 sees the channel, so a crafted message cannot make it post.
+
+The connector relay stays on Haiku with hooks, skills, project settings and auto-memory
+disabled, a bounded response and no session persistence. It never uses a Slack API token.
+Token logs distinguish cached reads/writes and include every connector attempt. Silent
+local ticks use no model; only connector reads/posts and review sessions do.

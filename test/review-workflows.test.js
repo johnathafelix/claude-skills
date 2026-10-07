@@ -148,3 +148,58 @@ test('essential review dimensions cannot be delegated away', async t => {
   const r = runner(t, 'code-review');
   await assert.rejects(r.run({ files: ['a.go'], coveredDimensions: ['security'] }, () => null), /essential dimension/);
 });
+
+test('equivalent invariant keys share one verdict across sources and retain evidence', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], verifyOnly: [
+    finding('read may dereference a nil user', { dimension: 'line-scan', claimKey: 'read:user non-null:nil input' }),
+    finding('missing guard before accessing user', { dimension: 'go/errors', claimKey: 'read:user non-null:nil input', guidelinePath: '/rules/errors.md' }),
+    finding('other trigger', { claimKey: 'read:user non-null:lookup miss' }),
+  ] }, p => {
+    assert.match(p, /\/rules\/errors.md/);
+    return { verdicts: [{ id: 0, refuted: false, reason: 'nil input demonstrated' }, { id: 1, refuted: false, reason: 'lookup miss demonstrated' }] };
+  });
+  assert.equal(result.stats.candidates, 2);
+  assert.equal(result.stats.duplicates, 1);
+  assert.equal(result.stats.confirmed, 2);
+  assert.ok(result.findings.every(f => f.verificationReason));
+});
+
+test('issues receive the verifier budget before earlier-file nits', async t => {
+  const r = runner(t, 'code-review');
+  const nits = Array.from({ length: 33 }, (_, i) => finding(`nit ${i}`, { severity: 'nit', line: i + 1 }));
+  const result = await r.run({ files: ['a.go'], verifyOnly: [...nits, finding('data loss', { file: 'z.go' })] }, (p, o) => {
+    if (o.label === 'verify:batch:0') assert.match(p, /ID 0\n[\s\S]*Claim: data loss/);
+    return { verdicts: Array.from({ length: 4 }, (_, id) => ({ id, refuted: false, reason: 'demonstrated' })) };
+  });
+  assert.equal(result.findings.find(f => f.description === 'data loss').verified, true);
+  assert.equal(result.unchallenged.length, 2);
+  assert.ok(result.unchallenged.every(f => f.severity === 'nit'));
+});
+
+test('delegated test ownership avoids another test finder but retains core angles', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], coveredDimensions: ['tests'] }, p => {
+    assert.ok(!p.includes('tests: Judge behavioral coverage'));
+    return { findings: [] };
+  });
+  assert.deepEqual(result.dimensionsDelegated, ['tests']);
+  assert.equal(result.stats.finderCalls, 3);
+  assert.ok(r.calls.some(c => c.prompt.includes('security: Look for injection')));
+});
+
+test('standard review can request a gap sweep and records phase durations', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], sweep: true }, () => ({ findings: [] }));
+  assert.equal(result.stats.finderCalls, 4);
+  for (const key of ['findDurationMs', 'sweepDurationMs', 'verifyDurationMs']) assert.ok(result.stats[key] >= 0);
+});
+
+test('language checkers use the pinned PR checkout and delta command', async t => {
+  const r = runner(t, 'ts-check');
+  await r.run({ guidelines: [{ stem: 'strong-types' }], files: ['/worktree/a.ts'], repoDir: '/worktree', diffCommand: 'git -C /worktree diff oldsha newsha' }, p => {
+    assert.match(p, /reviewed checkout is \/worktree/);
+    assert.match(p, /git -C \/worktree diff oldsha newsha/);
+    return r.proof(p);
+  });
+});
