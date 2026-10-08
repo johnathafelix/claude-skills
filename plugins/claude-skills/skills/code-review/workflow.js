@@ -65,7 +65,7 @@ const nitInstructions = reviewNitPolicy(parsedArgs.nitPolicy)
 // Set by review-pr to verify findings from other checkers (golang-check, ts-check): skips
 // the finders and the sweep, and runs only the adversarial verifier on these.
 const verifyOnly = Array.isArray(parsedArgs.verifyOnly) ? parsedArgs.verifyOnly : null
-for (const key of ['verifyOnly', 'externalFindings']) {
+for (const key of ['verifyOnly', 'externalFindings', 'priorFindings', 'expectedPriorIds', 'inputGaps', 'inputRejectedFindings']) {
   if (parsedArgs[key] !== undefined && !Array.isArray(parsedArgs[key])) throw new Error(`${key} must be an array`)
 }
 const diffCommand = typeof parsedArgs.diffCommand === 'string' && parsedArgs.diffCommand.trim() ? parsedArgs.diffCommand.trim() : `git diff origin/${baseBranch}`
@@ -179,11 +179,12 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings'],
   properties: {
+    incompleteDimensions: { type: 'array', items: { type: 'string' } },
     findings: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['file', 'line', 'severity', 'description', 'suggestedFix', 'claimKey'],
+        required: ['file', 'line', 'severity', 'description', 'suggestedFix', 'claimKey', 'identity'],
         properties: {
           file: { type: 'string' },
           line: { type: 'integer' },
@@ -192,6 +193,9 @@ const FINDINGS_SCHEMA = {
           suggestedFix: { type: 'string' },
           dimension: { type: 'string' },
           claimKey: { type: 'string' },
+          identity: { type: 'object', required: ['symbol', 'invariant', 'trigger'], properties: {
+            symbol: { type: 'string' }, invariant: { type: 'string' }, trigger: { type: 'string' },
+          } },
         },
       },
     },
@@ -205,6 +209,8 @@ const VERDICT_SCHEMA = {
     refuted: { type: 'boolean' },
     reason: { type: 'string' },
     severity: { type: 'string', enum: ['issue', 'nit'] },
+    file: { type: 'string' },
+    line: { type: 'integer' },
   },
 }
 
@@ -226,8 +232,9 @@ function contextBlock() {
 ${fileList}
 
 What changed: ${changeNote || 'no change note provided — review the files as given'}
-${parsedArgs.reviewContextPath ? `Review scope and previous complete review: ${parsedArgs.reviewContextPath}. If incremental, review the new delta, search callers/callees affected by changed symbols, and expand into unchanged PR functions where a changed contract or dependency can alter behavior. Recheck prior claims independently; do not assume an old finding is still true. The fullDiffCommand in that context is available when intent or dependency scope is unclear.` : ''}
+${parsedArgs.reviewContextPath ? `Pinned scope: ${parsedArgs.reviewContextPath}. If incremental, inspect affected callers/callees and expand into unchanged PR functions when a changed contract alters behavior. Use fullDiffCommand only for an unresolved dependency question. Prior claims are routed separately to independent challengers; do not spend finder reads reconfirming them.` : ''}
 ${planPath ? `\nImplementation plan (consult the relevant section when intent is ambiguous): ${planPath}` : ''}
+${parsedArgs.evidenceIndexPath ? `Compact scope/evidence index: ${parsedArgs.evidenceIndexPath}. Use it to select patches and bounded source excerpts; it is an index, not proof that code is correct.` : ''}
 ${parsedArgs.changeManifestPath ? `Task manifest: ${parsedArgs.changeManifestPath}. Read its per-file patches. They are authoritative, including additions, deletions and pre-existing dirty baselines; do not rediscover a branch-wide diff.` : ''}`
 }
 
@@ -238,8 +245,10 @@ function descriptionRule(dim) {
 }
 
 const SHARED_RULES = `- If a task manifest is supplied, read its patches instead of the branch diff. Otherwise read the actual diff (\`${diffCommand}\`, or per-file with \`-- <path>\`) before reporting anything — do not guess from filenames.
-- Keep distinct defects separate, even on the same line. Set claimKey to "<enclosing symbol>:<violated invariant>:<trigger>". Use code identifiers and concrete states, not angle names, severity, suggested fixes or prose wording. Equivalent claims must use the same key; different triggers/invariants must use different keys.
+- Set identity to {symbol,invariant,trigger} and claimKey to "<symbol>:<invariant>:<trigger>". Use stable code identifiers and concrete states, not angle names, line numbers or prose wording. Equivalent claims use the same identity even on nearby lines; keep different triggers/invariants separate.
+- Batch independent source reads in bounded excerpts. Read shared context once per pass; do not repeatedly dump giant diffs or instruction files. Expand to callers only for a concrete dependency question. Return incompleteDimensions naming unfinished angles when required code cannot be inspected.
 - Report only findings you are confident about; prefer silence over a shaky flag. A false positive becomes a wasted fix cycle.
+- Return every concrete correctness issue you discover; never omit a known issue to meet an output quota. The nit policy limits nits, and excess verifier work stays explicitly unchallenged.
 - \`line\` is the 1-based line number in the file as it exists now in the code under review.
 - \`suggestedFix\` must quote enough surrounding code (before -> after) that the fix can be located without relying on the line number alone.
 - \`severity\`: "issue" for wrong behavior, a crash, data loss, a security hole, a test gap that would let a regression through, a broken CLAUDE.md rule, or docs/comments that point readers at the wrong code. "nit" only when it has no effect on behavior or correctness — small duplication, naming, comment wording, a simpler equivalent form. When unsure, use "issue".`
@@ -271,10 +280,11 @@ ${contextBlock()}
 Already reported by the first pass (candidates, not yet challenged):
 ${known}
 
-Re-read the diff and the enclosing functions looking ONLY for defects not already listed. Do not re-derive or re-confirm anything above — your job is gaps. Focus on what a first pass tends to miss: moved or extracted code that dropped a guard or anchor; second-tier footguns (a default evaluated once, \`hash()\` non-determinism, a lock scope that shrank, predicate methods with side effects); setup/teardown asymmetry in tests; config defaults flipped.
+Inspect the scope index/diff once and select the highest-risk paths not resolved by the grouped passes. Look ONLY for new correctness defects: moved/extracted guards, concurrency and partial failure, test setup/teardown asymmetry, and changed defaults. Do not re-derive listed claims or audit style across the repository.
 
 Rules:
-- Report at most 8 findings, each a defect not already on the list.
+- Return every new concrete defect, excluding claims already on the list.
+- Budget: at most 12 source/search tool calls, batching bounded excerpts. Reserve the last call for structured output. If unresolved risks need more reads, return reviewComplete:false and incompleteReason naming those paths/questions. Never claim completion after exhausting the budget. Otherwise return reviewComplete:true and incompleteReason:"".
 - ${descriptionRule(SWEEP)}
 ${SHARED_RULES}
 
@@ -292,6 +302,9 @@ Claim: ${f.description}
 Suggested fix: ${f.suggestedFix}
 
 ${locationNote}Read the actual file content at that location and ${parsedArgs.changeManifestPath ? `the task manifest ${parsedArgs.changeManifestPath} and its patches` : `the diff (\`${diffCommand}\`)`} before judging.
+${f.priorIds?.length ? `This is a prior review claim (${f.priorIds.join(', ')}). Recheck it independently; coordinator opinions that it is fixed are not evidence.` : ''}
+${f.needsRelocation ? 'The old anchor changed or disappeared. Locate the current symbol/invariant before judging; do not refute merely because the old line moved. If confirming, return the current repo-relative file and line. If it cannot be located or shown fixed, leave its verdict unresolved.' : ''}
+${f.locations?.length ? `Equivalent source locations/wordings: ${JSON.stringify(f.locations)}. Check that they describe the same invariant/trigger; if a variant differs, report the unresolved variant in your reason and omit the verdict.` : ''}
 
 Refute (refuted: true) if: the code does not do what the claim says (quote the actual line); the problem is provably impossible (show the type, constant, or invariant); it is already handled in this diff (cite the guard); the line number does not correspond to the described code; for an issue, the fix would not change behavior; for a nit, the stated cost (duplication, naming, wording) is not actually there.${dim.refute ? ` ${dim.refute}` : ''}
 
@@ -306,6 +319,12 @@ const dimensionsUnverified = new Set()
 const unchallenged = []
 const refuted = []
 const rejectedFindings = []
+for (const gap of parsedArgs.inputGaps || []) dimensionsUnverified.add(String(gap))
+for (const rejected of parsedArgs.inputRejectedFindings || []) {
+  const entry = rejected && typeof rejected === 'object' ? rejected : { finding: rejected, validationErrors: ['malformed rejected input'] }
+  rejectedFindings.push(entry)
+  dimensionsUnverified.add(entry.dimension || `external/${entry.rule || 'rejected-input'}`)
+}
 const covered = new Set(Array.isArray(parsedArgs.coveredDimensions) ? parsedArgs.coveredDimensions : [])
 // Ownership can suppress overlapping checks, never core correctness or security.
 const allowedCovered = new Set(['tests', 'comments', 'conventions'])
@@ -314,7 +333,8 @@ const active = DIMENSIONS.filter(d => !covered.has(d.key))
 const fastKeys = new Set(['line-scan', 'removed-behavior', 'cross-file', 'language-pitfalls', 'wrapper-proxy', 'error-handling', 'type-invariants', 'security', 'tests'])
 const selected = profile === 'fast' ? active.filter(d => fastKeys.has(d.key)) : active
 const batchesOf = (items, count) => Array.from({ length: Math.ceil(items.length / count) }, (_, i) => items.slice(i * count, (i + 1) * count))
-const normalize = value => String(value || '').replace(/[–—―]/g, '-').replace(/→/g, '->').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()
+const canonical = value => String(value || '').replace(/[–—―]/g, '-').replace(/→/g, '->').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim()
+const normalize = value => canonical(value).toLowerCase()
 const byPriority = (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.file.localeCompare(b.file) || a.line - b.line
 async function pool(items, worker) {
   let next = 0
@@ -341,14 +361,34 @@ function acceptFinding(raw, dimension, external = false) {
 }
 function deduplicate(items) {
   const unique = new Map()
+  const identities = new Map()
+  const aliases = new Map()
   for (const f of items) {
-    const key = `${f.file}:${f.line}:${normalize(f.claimKey || f.description)}`
+    if (!f.identity || !['symbol', 'invariant', 'trigger'].every(k => typeof f.identity[k] === 'string' && f.identity[k].trim())) continue
+    const parts = ['symbol', 'invariant', 'trigger'].map(k => canonical(f.identity[k]))
+    const key = `${f.file}:${JSON.stringify(parts)}`
+    identities.set(f, key)
+    for (const claimKey of [parts.join(':'), f.claimKey].filter(Boolean)) {
+      const alias = `${f.file}:${normalize(claimKey)}`
+      if (!aliases.has(alias)) aliases.set(alias, new Set())
+      aliases.get(alias).add(key)
+    }
+  }
+  for (const f of items) {
+    const legacyKey = `${f.file}:${f.claimKey ? normalize(f.claimKey) : `${f.line}:${normalize(f.description)}`}`
+    const matches = f.claimKey ? aliases.get(legacyKey) : null
+    // Legacy claims can join one unambiguous structured identity. Conflicting
+    // identities (including case-sensitive symbols) never collapse via an alias.
+    const key = identities.get(f) || (matches?.size === 1 ? [...matches][0] : `legacy:${legacyKey}`)
     const first = unique.get(key)
     if (!first) unique.set(key, { ...f, dimensions: [...new Set([...(f.dimensions || []), f.dimension || 'external'])] })
     else {
       stats.duplicates++
       first.severity = higherSeverity(first.severity, f.severity)
       first.dimensions = [...new Set([...first.dimensions, ...(f.dimensions || []), f.dimension || 'external'])]
+      first.priorIds = [...new Set([...(first.priorIds || []), ...(f.priorIds || [])])]
+      first.needsRelocation ||= f.needsRelocation
+      first.locations = [...(first.locations || []), { file: f.file, line: f.line, description: f.description, suggestedFix: f.suggestedFix }]
       // Keep all proof inputs when equivalent claims come from different checkers.
       first.evidence = [...(first.evidence || []), ...(f.evidence || []), ...[f.guidelinePath, f.coverageFile].filter(Boolean)]
     }
@@ -360,16 +400,27 @@ function external(items) {
 }
 async function find() {
   phase('Find')
-  const groups = profile === 'thorough' ? selected.map(d => [d]) : [
+  const thoroughGroups = [
+    ['line-scan', 'removed-behavior', 'type-invariants'],
+    ['cross-file', 'wrapper-proxy', 'error-handling'],
+    ['language-pitfalls', 'security'],
+    ['tests', 'comments', 'conventions'],
+    ['reuse', 'simplification', 'efficiency', 'altitude'],
+  ]
+  const groups = profile === 'thorough' ? thoroughGroups.map(keys => selected.filter(d => keys.includes(d.key))).filter(g => g.length) : [
     selected.filter(d => d.kind === 'bug'),
     selected.filter(d => ['tests', 'comments', 'conventions'].includes(d.key)),
     selected.filter(d => d.kind === 'cost' && !['tests', 'comments', 'conventions'].includes(d.key)),
   ].filter(g => g.length)
   const results = await pool(groups, async group => {
     stats.finderCalls++
-    const prompt = group.length === 1 ? findPrompt(group[0]) : `Review these related angles in one source-reading pass. Read changed hunks and enclosing code once, expanding to callers as needed.\n${contextBlock()}\nAngles:\n${group.map(d => `${d.key}: ${d.prompt} ${descriptionRule(d)}`).join('\n')}\n${SHARED_RULES}\nReturn at most 8 concrete findings, each with dimension set to one supplied angle. Report equivalent claims once. Return findings: [] when clean.`
+    const prompt = group.length === 1 ? findPrompt(group[0]) : `Review these related angles in one source-reading pass. Read changed hunks and enclosing code once, expanding to callers as needed.\n${contextBlock()}\nAngles:\n${group.map(d => `${d.key}: ${d.prompt} ${descriptionRule(d)}`).join('\n')}\n${SHARED_RULES}\nReturn concrete findings with dimension set to one supplied angle. Report equivalent claims once. Return findings: [] when clean.`
     const result = await agent(`${prompt}\nReturn repo-relative file paths. ${nitInstructions}`, { label: `find:${group.map(d => d.key).join('+')}`, phase: 'Find', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
     if (!result || !Array.isArray(result.findings)) return null
+    if (result.incompleteDimensions !== undefined) {
+      if (!Array.isArray(result.incompleteDimensions) || result.incompleteDimensions.some(key => !group.some(d => d.key === key))) return null
+      for (const key of result.incompleteDimensions) dimensionsUnverified.add(key)
+    }
     const accepted = []
     for (const f of result.findings) {
       const dimension = group.length === 1 ? group[0].key : f?.dimension
@@ -392,7 +443,14 @@ async function find() {
     phase('Sweep')
     stats.finderCalls++
     try {
-      const result = await agent(`${sweepPrompt(candidates)}\nReturn repo-relative file paths. ${nitInstructions}`, { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema: FINDINGS_SCHEMA })
+      const schema = { ...FINDINGS_SCHEMA, required: ['findings', 'reviewComplete', 'incompleteReason'], properties: {
+        ...FINDINGS_SCHEMA.properties, reviewComplete: { type: 'boolean' }, incompleteReason: { type: 'string' },
+      } }
+      const result = await agent(`${sweepPrompt(candidates)}\nReturn repo-relative file paths. ${nitInstructions}`, { label: 'find:sweep', phase: 'Sweep', model: MODEL, effort: EFFORT, schema })
+      if (result?.reviewComplete !== true || typeof result?.incompleteReason !== 'string' || result.incompleteReason.trim()) {
+        dimensionsUnverified.add('sweep')
+        log(`sweep incomplete: ${result?.incompleteReason || 'missing completion evidence'}`)
+      }
       if (!result || !Array.isArray(result.findings)) dimensionsUnverified.add('sweep')
       else for (const f of result.findings) {
         const finding = acceptFinding(f, 'sweep')
@@ -402,7 +460,11 @@ async function find() {
   }
   return candidates
 }
-const candidates = deduplicate(verifyOnly ? external(verifyOnly) : [...await find(), ...external(Array.isArray(parsedArgs.externalFindings) ? parsedArgs.externalFindings : [])])
+const priors = (parsedArgs.priorFindings || []).map((f, i) => ({ ...f,
+  priorIds: [...new Set([String(f?.priorId || `prior:${i}`), ...(Array.isArray(f?.priorIds) ? f.priorIds.map(String) : [])])],
+  dimension: f?.dimension || 'prior-review' }))
+const expectedPriorIds = [...new Set([...(parsedArgs.expectedPriorIds || []).map(String), ...priors.flatMap(f => f.priorIds)])]
+const candidates = deduplicate([...(verifyOnly ? external(verifyOnly) : await find()), ...external(parsedArgs.externalFindings || []), ...external(priors)])
 stats.candidates = candidates.length
 phase('Verify')
 const findings = []
@@ -424,17 +486,25 @@ batchesOf(candidates, 4).forEach((batch, index) => {
       unchallenged.push({ ...f, verified: false, verificationReason: index >= 8 ? 'verifier budget exhausted' : 'missing or malformed verdict' })
       for (const dimension of f.dimensions) dimensionsUnverified.add(dimension)
     } else if (v.refuted) refuted.push({ ...f, refutedReason: v.reason })
-    else findings.push({ ...f, severity: higherSeverity(f.severity, v.severity || f.severity), verified: true, verificationReason: v.reason })
+    else if (f.needsRelocation && (!reviewPath(v.file, repoDir) || !Number.isInteger(v.line) || v.line < 1)) {
+      unchallenged.push({ ...f, verified: false, verificationReason: 'prior claim lacks a current source anchor' })
+      dimensionsUnverified.add('prior-review')
+    } else findings.push({ ...f, ...(f.needsRelocation ? { file: reviewPath(v.file, repoDir), line: v.line, needsRelocation: false } : {}), severity: higherSeverity(f.severity, v.severity || f.severity), verified: true, verificationReason: v.reason })
   }
 })
 findings.push(...unchallenged)
 findings.sort(byPriority)
 stats.confirmed = findings.length - unchallenged.length
 stats.rejected = rejectedFindings.length
+const verdictPriorIds = [...new Set([...findings.filter(f => f.verified), ...refuted].flatMap(f => f.priorIds || []))]
+const missingPriorIds = expectedPriorIds.filter(id => !verdictPriorIds.includes(id))
+if (missingPriorIds.length) dimensionsUnverified.add('prior-review')
 // Timing belongs to Workflow metadata; sandbox clocks are deliberately unavailable.
 return {
   findings, findingCount: findings.length, dimensionsUnverified: [...dimensionsUnverified].sort(),
   unchallenged, refuted, rejectedFindings, stats,
+  priorClaims: { expected: expectedPriorIds, challenged: verdictPriorIds, missing: missingPriorIds },
+  ...(parsedArgs.coverageUnverified ? { coverageUnverified: parsedArgs.coverageUnverified } : {}),
   dimensionsDelegated: [...covered],
   dimensionsSkipped: verifyOnly ? [] : active.filter(d => !selected.includes(d)).map(d => d.key),
 }

@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review local changes or a GitHub PR with grouped opus finders and bounded independent challenge batches. Fast and standard profiles reduce fan-out; thorough uses all 15 angles plus a sweep. Reports findings and explicit coverage gaps; never edits or posts."
+description: "Review local changes or a GitHub PR with grouped opus finders and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
 argument-hint: "[fast|standard|thorough] [low|medium|high|xhigh|max] [PR URL]"
 ---
 
@@ -90,18 +90,19 @@ never touched.
 `Workflow` rejects a `scriptPath` outside the working directory or an added directory, and
 this skill's own directory is usually the plugin cache. Use the exact session scratchpad
 path declared by the harness, not an arbitrary mktemp directory or a path under .git.
-Stage the script there first; staging inlines its shared input helpers:
+Write the Step 2 args to `<artifacts>/review-args.json`, then build an exact payload:
 
 ```bash
-node "<plugin>/scripts/stage-workflow.js" - "<absolute dir of this SKILL.md>/workflow.js" "<scratchpad>/code-review-workflow.js"
+node "<plugin>/scripts/review-dispatch.js" code-review "<artifacts>/review-args.json" "<artifacts>" --scratchpad "<declared scratchpad>"
 ```
 
 Resolve the directory from this file's own location — do not hardcode a home directory.
-If the session declares no readable scratchpad, stage at a temporary path and pass the
-**staged contents** as Workflow `script`; never dispatch that temporary scriptPath.
+Omit --scratchpad when none is declared/readable. The helper then includes the unchanged
+staged bytes as Workflow script. Read the returned dispatchPath and pass that exact JSON
+object to Workflow; do not attempt the temp scriptPath first or rewrite/trim the script.
 
 ```
-Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: <Step 2 args> })
+Workflow(<exact object from dispatchPath>)
 ```
 
 Pass `args` as a real JSON object, not a JSON-encoded string. Wait for the completion
@@ -111,6 +112,9 @@ The default `nitPolicy: "material"` limits each finder to two nits with concrete
 maintenance/testing cost. It does not limit correctness issues or discard existing
 claims before challenge. Set `nitPolicy: "all"` only for an explicitly requested style
 audit; thorough controls review depth, not the volume of style suggestions.
+Fast uses two groups, standard three, thorough five plus a fresh sweep limited to 12
+source/search calls. A budget-exhausted sweep is an explicit gap. All angles for the
+profile and independent correctness challenges remain; do not omit them for tiny diffs.
 
 ## Step 4 — Report
 
@@ -128,7 +132,8 @@ N. `file:line` [dimension · severity]
 ```
 
 In PR mode, paths are relative to the repo root, not to the worktree. Equivalent claims
-use a canonical symbol/invariant/trigger claimKey and are deduplicated before verification; distinct defects at the same
+use structured identity `{symbol,invariant,trigger}` and a matching claimKey; equivalent
+claims at shifted anchors are deduplicated before verification. Distinct defects at the same
 line remain separate. Each finding carries its originating dimensions. `severity` is `issue` or `nit` (no effect on
 behavior or correctness); list issues before nits.
 
@@ -137,7 +142,8 @@ plainly that an unverified angle is not a clean pass. Always report `unchallenge
 `dimensionsSkipped` for the selected profile. With zero findings and no gaps, say the
 review is clean for that profile, not for omitted dimensions. Report rejectedFindings
 with their validationErrors separately from unchallenged claims; a malformed claim
-has not reached a verifier. Workflow stats report call counts and confirmed count.
+has not reached a verifier. `priorClaims.missing` exposes omitted prior verdicts.
+Workflow stats report call counts and confirmed count.
 Read compact timing evidence without loading the metadata's embedded scripts/prompts:
 
 ```bash

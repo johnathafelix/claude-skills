@@ -28,7 +28,9 @@ by you at this head: stop as already_reviewed. Draft or own PR: CAN_APPROVE=fals
 Pin HEAD_SHA before fetching code. If prior reviews exist, fetch your inline comments
 and the author's thread replies: id,in_reply_to_id,user,path,line (fallback
 original_line),body. Include your review bodies' **Outside this PR's diff** entries in
-PRIOR. Do not preload other reviewers' conversations.
+PRIOR. Save originals as `<artifacts>/prior-findings.json` (array of findings or GitHub
+comments with id/path/line/original_line/body); include every claim, even one you believe
+fixed. Replies affect posting, not independent challenge. Do not preload other reviewers.
 
 Find a checkout whose `gh repo view --json nameWithOwner --jq .nameWithOwner` equals
 OWNER/REPO case-insensitively: current directory, then
@@ -68,6 +70,8 @@ relocated or shown fixed is an explicit gap and blocks ordinary approval. An emp
 matching inputs permits explicit reuse of the complete clean review: skip empty
 workflows, save the clean result for HEAD_SHA and continue to the posting decision.
 Keep unrelocated prior claims as gaps rather than submitting stale coordinates.
+Full scope still retains prior claims; changing profile/policy invalidates reuse, not
+their independent recheck. A tiny config diff still runs the selected core profile.
 
 ## Collect candidates and challenge once
 
@@ -79,6 +83,15 @@ the pinned checkout and rejects paths outside it.
 Read applicable siblings' **Scope** and **Stage and run** sections for guideline
 selection, version gates and staging; use a distinct staged script path for each.
 Override their presentation/fix/verification steps with this read-only shared queue.
+Write each check's args to JSON, then use the shared dispatcher:
+
+```bash
+node "<plugin>/scripts/review-dispatch.js" "<check skill>" "<check-args.json>" "<check artifacts>" --scratchpad "<declared scratchpad>"
+```
+
+Omit --scratchpad if none is declared/readable. Submit the exact object at dispatchPath
+to Workflow; the helper chooses unchanged inline script bytes in that case. Do not try
+an arbitrary temp scriptPath, shorten scripts, or start core review before checks finish.
 
 - Surviving Go files: golang-check, preserving per-module version gates.
 - Surviving TS/TSX files: ts-check.
@@ -92,9 +105,14 @@ Unavailable coverage must not delay the remaining test guidelines.
 Choose the existing coverage command for affected packages/workspaces/tests, covering
 every changed executable source file. Run it through the bounded helper:
 
+If registry credentials or network access are already known to be unavailable, record
+that gap and skip installation. Do not repeat an install after a private-package/auth
+or offline failure; use valid cached evidence when available and continue other checks.
+
 ```bash
 python3 "<skill>/scripts/coverage.py" --repo "$WT" --cwd "<affected package>" \
   --out "<scratchpad>/coverage" --report "<scratchpad>/coverage/<report file>" \
+  --expected-sources "<expected-sources.json>" \
   -- <coverage command and separate arguments>
 ```
 
@@ -107,30 +125,53 @@ REVIEW_PR_INSTALL_TIMEOUT_SECONDS and REVIEW_PR_COVERAGE_TIMEOUT_SECONDS. Failur
 coverage UNVERIFIED with its reason/log; omit that guideline and continue the others.
 Never restart installations/suites, broaden to the whole repo or investigate unrelated
 failures just to make coverage pass. Pure docs/config needs neither coverage nor test-check.
+Expected-sources is a JSON array of executable paths owned by this runner. For Jest use
+[the generated-config plan](references/jest-coverage.md) instead of constructing CLI
+source lists. Cover each owning workspace; an omitted source is UNVERIFIED even if the
+suite passes. Launch one helper as a tracked background task, await its notification,
+and read coverage/result.json for stage/result; do not nohup, restart it, or wait on a
+process-name search. Run non-coverage test guidelines alongside language checks. If
+coverage arrives in budget, run only its guideline before core; otherwise mark it
+UNVERIFIED and continue with the test fallback.
 
 Normalize all candidates to repo-relative
 `{file,line,severity,description,suggestedFix,dimension,claimKey}`. Go/test error maps to
 issue, other levels to nit; TS findings are nits. Combine test description/rationale,
 use action as suggestedFix, preserve source/rule dimensions and attach guidelinePath/
-coverageFile for test exceptions/evidence. Canonicalize equivalent claim keys to
-`<enclosing symbol>:<violated invariant>:<trigger>`; preserve different triggers/invariants
+coverageFile for test exceptions/evidence. Use identity `{symbol,invariant,trigger}` and
+matching claimKey `<symbol>:<invariant>:<trigger>`; preserve different triggers/invariants
 even at one line. Apply matching keys to prior findings too.
 The runtime accepts summary/failure_scenario aliases from implementers, but use
 description for new candidates. Preserve rejectedFindings and validationErrors as gaps;
 do not recover raw journal output or redispatch an exhausted check to hide a gap.
 Include every validated language/test candidate in the shared queue.
 
-Dispatch the staged code-review workflow **once**, after candidate collection:
+Write core args to `<artifacts>/review-args.json` after candidate collection:
 
 ```text
 { files: reviewFiles, baseBranch: BASE, profile: PROFILE, effort: EFFORT,
   repoDir: context.repoDir, diffCommand: context.diffCommand, reviewContextPath: contextPath,
   nitPolicy: "material",
+  coverageUnverified: <reason only when coverage unavailable>,
   changeNote: "PR #<n>: <title>",
-  externalFindings: <normalized language/test candidates and priorFindings>,
   coveredDimensions: <["tests"] only if all applicable test rules and measured coverage
                       completed; otherwise []> }
 ```
+
+Save exact checker results (optionally the {result:...} wrapper) as JSON, then build:
+
+```bash
+node "<plugin>/scripts/review-dispatch.js" code-review "<artifacts>/review-args.json" "<artifacts>/core" \
+  --context "<context JSON>" --prior "<artifacts>/prior-findings.json" \
+  --check "ts-check=<TS result JSON>" --check "test-check=<test result JSON>" \
+  --scratchpad "<declared scratchpad>"
+```
+
+Include every applicable result (Go/module/coverage-only results can be additional
+--check entries); omit absent checks and the scratchpad option when unavailable.
+The helper attaches checker claims, gaps, evidence index and cached/GitHub prior IDs.
+Submit that exact payload **once**. Never replace prior claims with your opinion that
+they are fixed. Inspect priorClaims.missing; any missing independent verdict is a gap.
 
 Core correctness/security remain in code-review. Suppress its tests angle only when
 test-check owns it completely; failure retains the fallback. Deduplicate equivalent
@@ -143,7 +184,7 @@ mechanical style and routine edge-coverage suggestions that will not be posted. 
 all correctness issues and independently challenge every candidate actually returned.
 
 Keep the complete confirmed list before filtering already-posted comments. With no gaps,
-write `{complete:true,findings:<complete verified list>,unchallenged:[]}` to scratchpad and
+write the full core result plus `complete:true` to scratchpad and
 call `review-state.py save --context <context JSON> --report <report JSON>` while WT still
 exists. Set complete=false if any applicable check/coverage was unverified; partial
 results never replace a complete cache. Save failure only affects reuse. Always clean

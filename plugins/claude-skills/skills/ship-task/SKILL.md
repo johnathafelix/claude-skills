@@ -31,7 +31,7 @@ Honor an explicit profile. Otherwise select and state:
 |---|---|---|---|
 | fast | Small, clear change with a known verification command; no concurrency, auth, data migration or public contract risk | Main thread or one sonnet fast-worker | Two grouped opus passes, medium effort |
 | standard | Ordinary feature or fix, possibly across several files | One fable planner; main thread coordinates sonnet workers | Three grouped opus passes, medium effort |
-| thorough | Concurrency, security, migration, subtle shared invariants, broad API change, or explicit request | Planner plus sonnet lead; opus for difficult reasoning | Individual angles plus sweep, high effort |
+| thorough | Concurrency, security, migration, subtle shared invariants, broad API change, or explicit request | Planner plus sonnet lead; opus for difficult reasoning | Five grouped passes plus bounded fresh sweep, high effort |
 
 Fast still checks the applicable language and tests and independently challenges
 findings. Escalate the profile when investigation reveals a material risk; explain why.
@@ -73,6 +73,9 @@ The helper pins the initial HEAD and snapshots pre-existing dirty/untracked cont
 deletions, modes and symlinks. Its per-file patches and changed ranges are the shared
 review scope. Do not reset the baseline after edits or commits. Unsupported submodules
 or an unavailable baseline must be handled explicitly, never silently excluded.
+Historical blobs are read in one batch and unchanged patches reused. Refresh once per
+edited snapshot; the full repository fingerprint still detects changes in test/config
+inputs and pre-existing dirt.
 
 ## 3. Implement, clean up, capture evidence
 
@@ -113,10 +116,11 @@ Exclude generated/vendor files from language checks and list relevant exclusions
 Run applicable `golang-check` / `ts-check` and `test-check`, passing
 `changeManifestPath`, explicit repo-relative file lists, repoDir, profile, baseline and
 `nitPolicy: "material"`. Stage checker scripts
-with `scripts/stage-workflow.js`; it inlines the shared runtime and guideline anchors.
+with `scripts/review-dispatch.js` (see code-review Step 3); it builds exact payloads and
+inlines the shared runtime and guideline anchors.
 Use the exact session scratchpad declared by the harness, not an arbitrary temp directory.
 Without a readable scratchpad, pass staged contents as Workflow script instead of scriptPath.
-Use `mode: "grouped"` normally; thorough can request `"individual"`.
+Use `mode: "grouped"` for all pipeline profiles; retain every applicable rule in its group.
 Go retains per-rule file scopes and per-module Go-version gates. Do not read guideline
 bodies into the coordinator context; checker agents read their short checklists.
 
@@ -125,6 +129,10 @@ expectations. Obtain coverage with the planned test command where applicable; re
 it only with matching command/configuration and a matching repository snapshot.
 Do not generate a second whole-suite coverage run if valid evidence already exists.
 Unavailable coverage is UNVERIFIED with a reason, never a clean pass.
+For fresh Jest evidence use review-pr's [generated-config plan](../review-pr/references/jest-coverage.md).
+For other runners pass --expected-sources to its coverage helper; every scoped source
+needs report evidence. Start non-coverage test guidelines alongside language checks.
+Await one tracked coverage task; do not restart failed installs or search/wait by PID.
 For this pipeline, run test-check with `verify: false`; these are **candidates**, handed
 to the following independent review together with language findings. Standalone
 test-check retains independent verification. Attach guideline paths, coverage path,
@@ -135,26 +143,36 @@ Use description/suggestedFix for implementer candidates too; summary/failure_sce
 are accepted aliases. Malformed candidates remain in rejectedFindings with validationErrors.
 Report these as gaps, distinct from unchallenged verdicts; never silently drop them.
 
-Stage the review runtime into the same session scratchpad, then dispatch:
-
-```bash
-node "<plugin>/scripts/stage-workflow.js" - "<plugin>/skills/code-review/workflow.js" "<scratchpad>/code-review-workflow.js"
-```
+Save checker results and write these core args to `<artifacts>/review-args.json`:
 
 ```text
-Workflow({ scriptPath: "<scratchpad>/code-review-workflow.js", args: {
+{
   files: <all task paths>, baseBranch: <base>, profile: <selected profile>,
   repoDir: <absolute repo root>, nitPolicy: "material",
   changeNote: <one-line intent>, planPath: <approved plan>,
   changeManifestPath: "<scratchpad>/ship-task/manifest.json",
-  externalFindings: <language and test candidates>,
+  externalFindings: <implementer candidates, if any>,
+  coverageUnverified: <reason only when coverage unavailable>,
   coveredDimensions: <["tests"] only if test-check and measured coverage completed; else []>
-}})
+}
 ```
+
+```bash
+node "<plugin>/scripts/review-dispatch.js" code-review "<artifacts>/review-args.json" "<artifacts>/core" \
+  --check "ts-check=<TS result JSON>" --check "test-check=<test result JSON>" \
+  --scratchpad "<declared scratchpad>"
+```
+
+Pass all applicable Go/module/test results as --check entries; omit absent checks.
+Use the same helper for each checker with its args JSON and a distinct artifact directory.
+Omit --scratchpad if none is declared/readable. Submit the exact dispatchPath object to
+Workflow; never trim scripts or try temp scriptPath first. Build/dispatch core once,
+after checker candidates exist. Input gaps and a compact evidence index are attached.
 
 The script deduplicates equivalent claims before challenging them, preserves distinct
 issues at one location, batches up to four claims per independent verifier, and caps
-verification at eight calls with at most four agents in flight. Thorough adds a sweep.
+verification at eight calls with at most four agents in flight. Thorough's fresh sweep
+has a 12-read/search-call budget; incomplete work remains a gap.
 Missing/malformed verdicts and budget overflow remain explicitly unchallenged. Do not
 fix them as confirmed, count them as clean, or start unbounded retries. Report the gap
 and request a targeted decision only if shipping cannot proceed without resolving it.

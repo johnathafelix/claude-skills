@@ -39,6 +39,80 @@ function runner(t, skill) {
   };
 }
 const finding = (description = 'reachable nil dereference', extra = {}) => ({ file: 'a.go', line: 5, severity: 'issue', description, suggestedFix: 'guard before use', ...extra });
+test('thorough grouped passes retain every angle and an incomplete sweep is a gap', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], profile: 'thorough' }, (p, o) => o.phase === 'Sweep'
+    ? { findings: [finding('possible leak', { claimKey: 'A:resource closed:early return' })], reviewComplete: false, incompleteReason: '12 reads exhausted; early-return caller unresolved' }
+    : o.phase === 'Verify' ? { verdicts: [{ id: 0, refuted: false, reason: 'resource leaks on early return' }] } : { findings: [] });
+  for (const key of ['line-scan', 'removed-behavior', 'cross-file', 'language-pitfalls', 'wrapper-proxy', 'error-handling', 'type-invariants', 'security', 'tests', 'comments', 'conventions', 'reuse', 'simplification', 'efficiency', 'altitude']) {
+    assert.ok(r.calls.some(c => c.options.phase === 'Find' && c.prompt.includes(`${key}:`)), key);
+  }
+  assert.deepEqual(result.dimensionsUnverified, ['sweep']);
+  assert.equal(result.stats.confirmed, 1);
+  assert.match(r.logs.join('\n'), /early-return caller unresolved/);
+});
+test('prior claims join the independent queue and omitted expected claims block completion', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], verifyOnly: [], priorFindings: [{ ...finding('old race'), priorId: 'github:123' }], expectedPriorIds: ['github:123', 'github:456'] }, (p, o) => {
+    assert.equal(o.phase, 'Verify');
+    assert.match(p, /prior review claim \(github:123\)/);
+    return { verdicts: [{ id: 0, refuted: true, reason: 'new atomic guard closes race' }] };
+  });
+  assert.deepEqual(result.priorClaims, { expected: ['github:123', 'github:456'], challenged: ['github:123'], missing: ['github:456'] });
+  assert.deepEqual(result.dimensionsUnverified, ['prior-review']);
+});
+test('a prior claim cannot be confirmed at its stale coordinate', async t => {
+  for (const relocated of [false, true]) {
+    const r = runner(t, 'code-review');
+    const result = await r.run({ files: ['a.go'], verifyOnly: [], priorFindings: [{ ...finding(), priorId: 'old', needsRelocation: true }] }, () => ({ verdicts: [{ id: 0, refuted: false, reason: 'same defect moved', ...(relocated ? { file: 'renamed.go', line: 12 } : {}) }] }));
+    assert.equal(result.stats.confirmed, relocated ? 1 : 0);
+    assert.deepEqual(result.priorClaims.missing, relocated ? [] : ['old']);
+    if (relocated) assert.equal(result.findings[0].file, 'renamed.go');
+    else assert.match(result.unchallenged[0].verificationReason, /current source anchor/);
+  }
+});
+test('structured invariant identity merges different prose and nearby anchors without merging triggers', async t => {
+  const r = runner(t, 'code-review');
+  const identity = { symbol: 'COM-1206 overlay docs', invariant: 'pointer locates overlay block', trigger: 'stale line range' };
+  const result = await r.run({ files: ['a.go'], verifyOnly: [
+    finding('stale pointer', { identity, claimKey: 'wording-one', line: 1264 }),
+    finding('wrong documentation anchor', { identity, claimKey: 'wording-two', line: 1265 }),
+    finding('wrong target section', { identity, claimKey: 'wording-three', priorIds: ['old-pointer'] }),
+    finding('distinct target', { identity: { ...identity, trigger: 'renamed file' }, claimKey: 'wording-four' }),
+  ] }, () => ({ verdicts: [{ id: 0, refuted: false, reason: 'block at different lines' }, { id: 1, refuted: false, reason: 'file renamed' }] }));
+  assert.equal(result.stats.candidates, 2);
+  assert.equal(result.stats.duplicates, 2);
+  const merged = result.findings.find(f => f.priorIds?.includes('old-pointer'));
+  assert.equal(merged.locations.length, 2);
+});
+test('checker validation gaps survive dispatch into the core result', async t => {
+  const r = runner(t, 'code-review');
+  const result = await r.run({ files: ['a.go'], verifyOnly: [], inputGaps: ['ts-check/strong-types'], inputRejectedFindings: [{ finding: null, rule: 'errors', validationErrors: ['invalid finding'] }] }, () => null);
+  assert.deepEqual(result.dimensionsUnverified, ['external/errors', 'ts-check/strong-types']);
+  assert.equal(result.rejectedFindings.length, 1);
+});
+test('legacy keys share one verdict with an unambiguous structured identity', async t => {
+  const r = runner(t, 'code-review');
+  const identity = { symbol: 'ReadUser', invariant: 'user non-null', trigger: 'nil input' };
+  const result = await r.run({ files: ['a.go'], verifyOnly: [
+    finding('missing guard', { identity, claimKey: 'ReadUser:user non-null:nil input' }),
+    finding('older wording', { claimKey: 'ReadUser:user non-null:nil input', line: 6, priorIds: ['old'] }),
+  ] }, () => ({ verdicts: [{ id: 0, refuted: true, reason: 'guard exists' }] }));
+  assert.equal(result.stats.candidates, 1);
+  assert.equal(result.stats.duplicates, 1);
+  assert.deepEqual(result.priorClaims.challenged, ['old']);
+});
+test('conflicting identities and case-sensitive symbols retain distinct verdicts', async t => {
+  const r = runner(t, 'code-review');
+  const identity = { symbol: 'ReadUser', invariant: 'user non-null', trigger: 'nil input' };
+  const result = await r.run({ files: ['a.go'], verifyOnly: [
+    finding('one symbol', { identity, claimKey: 'same legacy key' }),
+    finding('other symbol', { identity: { ...identity, symbol: 'readUser' }, claimKey: 'same legacy key' }),
+    finding('ambiguous older claim', { claimKey: 'same legacy key' }),
+  ] }, () => ({ verdicts: [0, 1, 2].map(id => ({ id, refuted: false, reason: 'distinct or unresolved claim' })) }));
+  assert.equal(result.stats.candidates, 3);
+  assert.equal(result.stats.duplicates, 0);
+});
 test('Go rules share three reads while preserving per-rule scope and severity', async t => {
   const r = runner(t, 'golang-check');
   const stems = Object.keys(r.meta).filter(s => s !== 'testing');
@@ -47,6 +121,7 @@ test('Go rules share three reads while preserving per-rule scope and severity', 
   assert.deepEqual(result.unverified, []);
   assert.ok(r.calls.some(c => c.prompt.includes('Files for this guideline: new.go')));
   assert.equal(r.calls.every(c => c.options.agentType === 'claude-skills:go-idiom-checker'), true);
+  assert.ok(r.calls.every(c => c.options.schema.properties.findings.items.required.includes('identity')));
 });
 test('a failed grouped proof retries only that rule and retains successful siblings', async t => {
   const r = runner(t, 'ts-check');
@@ -97,14 +172,15 @@ test('standalone test verification is capped and retains missing/excess verdicts
 });
 test('pipeline test mode defers independent challenge explicitly', async t => {
   const r = runner(t, 'test-check');
-  const result = await r.run({ verify: false, guidelines: [{ stem: 'mock-expectations' }], sourceFiles: [], testFiles: ['a_test.go'] }, p => r.proof(p));
+  const result = await r.run({ verify: false, coverageFile: '/coverage/report.json', guidelines: [{ stem: 'mock-expectations' }], sourceFiles: [], testFiles: ['a_test.go'] }, p => r.proof(p));
   assert.equal(result.verificationDeferred, true);
   assert.equal(result.stats.verifierCalls, 0);
+  assert.equal(result.coverageFile, '/coverage/report.json');
 });
 test('review profiles bound finder fan-out while preserving a thorough escape hatch', async t => {
-  for (const [profile, expected] of [['fast', 2], ['standard', 3], ['thorough', 16]]) {
+  for (const [profile, expected] of [['fast', 2], ['standard', 3], ['thorough', 6]]) {
     const r = runner(t, 'code-review');
-    const result = await r.run({ files: ['a.go'], profile }, () => ({ findings: [] }));
+    const result = await r.run({ files: ['a.go'], profile }, () => ({ findings: [], reviewComplete: true, incompleteReason: '' }));
     assert.equal(result.stats.finderCalls, expected);
     assert.equal(result.stats.verifierCalls, 0);
     assert.deepEqual(result.dimensionsUnverified, []);
@@ -196,7 +272,7 @@ test('delegated test ownership avoids another test finder but retains core angle
 
 test('standard gap sweep completes with sandbox clocks denied and leaves timing to metadata', async t => {
   const r = runner(t, 'code-review');
-  const result = await r.run({ files: ['a.go'], sweep: true }, () => ({ findings: [] }));
+  const result = await r.run({ files: ['a.go'], sweep: true }, () => ({ findings: [], reviewComplete: true, incompleteReason: '' }));
   assert.equal(result.stats.finderCalls, 4);
   for (const key of ['durationMs', 'findDurationMs', 'sweepDurationMs', 'verifyDurationMs']) assert.equal(Object.hasOwn(result.stats, key), false);
 });

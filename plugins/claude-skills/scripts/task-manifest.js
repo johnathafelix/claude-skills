@@ -5,8 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
-function git(repo, argv, allowFailure = false) {
-  const r = spawnSync('git', ['-C', repo, ...argv], { maxBuffer: 64 * 1024 * 1024 });
+function git(repo, argv, allowFailure = false, input) {
+  const r = spawnSync('git', ['-C', repo, ...argv], { input, maxBuffer: 256 * 1024 * 1024 });
   if (r.status !== 0 && !allowFailure) throw new Error(r.stderr?.toString() || `git ${argv[0]} failed`);
   return r.status === 0 ? r.stdout : null;
 }
@@ -29,14 +29,51 @@ function current(repo, name) {
   return { mode: stat.mode & 0o111 ? '100755' : '100644', data: fs.readFileSync(file) };
 }
 function ignored(name, excludes) { return excludes.some(x => name === x || name.startsWith(x.replace(/\/$/, '') + '/')); }
-function repositorySnapshot(repo, excludes = []) {
+function scan(repo, excludes = [], objects, algorithm, saved = {}) {
   const digest = crypto.createHash('sha256');
   digest.update(git(repo, ['rev-parse', 'HEAD']));
+  const entries = new Map();
   for (const name of files(repo).filter(f => !ignored(f, excludes))) {
     const entry = current(repo, name);
-    digest.update(JSON.stringify([name, entry?.mode || null, entry ? hash(entry.data) : null]));
+    if (entry) {
+      entry.hash = hash(entry.data);
+      if (objects) entry.oid = blobId(entry.data, algorithm);
+      // Retain source bytes only where a task patch may need them, rather than
+      // keeping the entire clean repository in memory alongside the fingerprint.
+      if (!objects || (!Object.hasOwn(saved, name) && entry.mode === objects[name]?.mode && entry.oid === objects[name]?.oid)) delete entry.data;
+    }
+    entries.set(name, entry);
+    digest.update(JSON.stringify([name, entry?.mode || null, entry?.hash || null]));
   }
-  return digest.digest('hex');
+  return { entries, snapshot: digest.digest('hex') };
+}
+function repositorySnapshot(repo, excludes = []) { return scan(repo, excludes).snapshot; }
+function tree(repo, head) {
+  return Object.fromEntries(names(git(repo, ['ls-tree', '-r', '-z', head])).map(row => {
+    const tab = row.indexOf('\t'), [mode, , oid] = row.slice(0, tab).split(' ');
+    return [row.slice(tab + 1), { mode, oid }];
+  }));
+}
+function blobs(repo, ids) {
+  ids = [...new Set(ids)];
+  const result = new Map();
+  if (!ids.length) return result;
+  const data = git(repo, ['cat-file', '--batch'], false, ids.join('\n') + '\n');
+  let offset = 0;
+  for (const oid of ids) {
+    const end = data.indexOf(10, offset);
+    const [actual, type, size] = data.subarray(offset, end).toString().split(' ');
+    if (end < 0 || actual !== oid || type !== 'blob' || !/^\d+$/.test(size)) throw new Error(`Cannot read baseline blob ${oid}`);
+    offset = end + 1;
+    const length = Number(size);
+    if (offset + length >= data.length || data[offset + length] !== 10) throw new Error('Truncated Git blob batch');
+    result.set(oid, data.subarray(offset, offset + length));
+    offset += length + 1;
+  }
+  return result;
+}
+function blobId(data, algorithm) {
+  return crypto.createHash(algorithm).update(`blob ${data.length}\0`).update(data).digest('hex');
 }
 function init(repo, out, base = 'main', excludes = []) {
   repo = fs.realpathSync(repo); out = canonicalLocation(out);
@@ -46,10 +83,9 @@ function init(repo, out, base = 'main', excludes = []) {
   const head = git(repo, ['rev-parse', 'HEAD']).toString().trim();
   const initialFiles = files(repo).filter(f => !ignored(f, excludes));
   const dirty = new Set([...names(git(repo, ['diff', 'HEAD', '--name-only', '-z'])), ...names(git(repo, ['ls-files', '--others', '--exclude-standard', '-z']))]);
-  const modes = {};
-  for (const row of names(git(repo, ['ls-tree', '-r', '-z', head]))) {
-    const tab = row.indexOf('\t'); modes[row.slice(tab + 1)] = row.slice(0, tab).split(' ')[0];
-  }
+  const objects = tree(repo, head);
+  const modes = Object.fromEntries(Object.entries(objects).map(([name, obj]) => [name, obj.mode]));
+  const objectFormat = git(repo, ['rev-parse', '--show-object-format']).toString().trim();
   const saved = {};
   for (const name of dirty) {
     if (ignored(name, excludes)) continue;
@@ -60,7 +96,7 @@ function init(repo, out, base = 'main', excludes = []) {
     saved[name] = { mode: entry.mode, backup };
   }
   // Include pre-existing deletions in the baseline so a later restoration is visible.
-  const state = { repo, out, head, base, excludes, initialFiles: [...new Set([...initialFiles, ...Object.keys(saved)])].sort(), modes, saved };
+  const state = { repo, out, head, base, excludes, initialFiles: [...new Set([...initialFiles, ...Object.keys(saved)])].sort(), modes, objects, objectFormat, saved };
   fs.writeFileSync(path.join(out, 'baseline.json'), JSON.stringify(state, null, 2));
   return refresh(out);
 }
@@ -68,21 +104,47 @@ function refresh(out) {
   out = path.resolve(out);
   const state = JSON.parse(fs.readFileSync(path.join(out, 'baseline.json'), 'utf8'));
   const { repo, head, excludes, saved, modes } = state;
-  const targets = [...new Set([...state.initialFiles, ...files(repo)])].filter(f => !ignored(f, excludes)).sort();
+  const objects = state.objects || tree(repo, head);
+  const algorithm = state.objectFormat || git(repo, ['rev-parse', '--show-object-format']).toString().trim();
+  const { entries: scanned, snapshot } = scan(repo, excludes, objects, algorithm, saved);
+  const targets = [...new Set([...state.initialFiles, ...scanned.keys()])].filter(f => !ignored(f, excludes)).sort();
+  for (const name of targets) if (!scanned.has(name)) {
+    const entry = current(repo, name);
+    if (entry) { entry.hash = hash(entry.data); entry.oid = blobId(entry.data, algorithm); }
+    scanned.set(name, entry);
+  }
+  // Compare raw content, not only Git status: assume-unchanged files and later task
+  // commits must still be visible. One scan also supplies the evidence fingerprint.
+  const changed = targets.filter(name => {
+    if (modes[name] === '160000') throw new Error(`Submodule requires explicit review scope: ${name}`);
+    if (Object.hasOwn(saved, name)) return true;
+    const after = scanned.get(name), before = objects[name];
+    return before ? !after || after.mode !== before.mode || after.oid !== before.oid : Boolean(after);
+  });
+  const historical = blobs(repo, changed.filter(name => !Object.hasOwn(saved, name) && objects[name]).map(name => objects[name].oid));
+  const previousFile = path.join(out, 'manifest.json');
+  const previous = fs.existsSync(previousFile) ? JSON.parse(fs.readFileSync(previousFile, 'utf8')) : {};
+  const reusable = new Map((previous.files || []).map(entry => [entry.path, entry]));
   fs.mkdirSync(path.join(out, 'patches'), { recursive: true });
   const entries = [];
-  for (const name of targets) {
+  for (const name of changed) {
     const wasDirty = Object.hasOwn(saved, name);
     let before = null;
     if (wasDirty) {
       if (saved[name]) before = { mode: saved[name].mode, data: fs.readFileSync(saved[name].backup) };
     } else if (modes[name]) {
-      if (modes[name] === '160000') throw new Error(`Submodule requires explicit review scope: ${name}`);
-      before = { mode: modes[name], data: git(repo, ['show', `${head}:${name}`]) };
+      before = { mode: modes[name], data: historical.get(objects[name].oid) };
     }
-    const after = current(repo, name);
+    const after = scanned.get(name) || null;
     if (!before && !after) continue;
     if (before && after && before.mode === after.mode && before.data.equals(after.data)) continue;
+    const beforeHash = before ? hash(before.data) : null, afterHash = after?.hash || null;
+    const old = reusable.get(name);
+    if (old && old.beforeHash === beforeHash && old.afterHash === afterHash && old.beforeMode === (before?.mode || null) && old.afterMode === (after?.mode || null)
+      && [old.beforePath, old.afterPath, old.patchPath].every(p => p && fs.existsSync(p))) {
+      entries.push(old);
+      continue;
+    }
     const stem = hash(name);
     const oldFile = path.join(out, 'patches', stem + '.old');
     const newFile = path.join(out, 'patches', stem + '.new');
@@ -120,11 +182,11 @@ function refresh(out) {
       beforePath: oldFile, afterPath: newFile, patchPath, changedRanges: ranges, hunkRanges: changedRanges,
       binary: (before?.data.includes(0) || after?.data.includes(0)) || false,
       beforeMode: before?.mode || null, afterMode: after?.mode || null,
-      beforeHash: before ? hash(before.data) : null, afterHash: after ? hash(after.data) : null });
+      beforeHash, afterHash });
   }
   const revision = hash(JSON.stringify(entries.map(({ path, beforeMode, afterMode, beforeHash, afterHash }) => ({ path, beforeMode, afterMode, beforeHash, afterHash }))));
   const manifest = { version: 1, repo, initialHead: head, baseBranch: state.base, revision,
-    repositorySnapshot: repositorySnapshot(repo, excludes), files: entries, preExistingDirty: Object.keys(saved).sort() };
+    repositorySnapshot: snapshot, files: entries, preExistingDirty: Object.keys(saved).sort() };
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return manifest;
 }

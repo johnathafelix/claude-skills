@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Run bounded coverage with isolated dependency and exact-input report caches."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 import pathlib
 import platform
+import re
 import signal
 import shutil
 import subprocess
 import tempfile
+import time
 
 
 def run(command, cwd, log, timeout):
@@ -153,18 +156,81 @@ def restore_report(source, destination, previous_repo, repo):
         shutil.copyfile(source, destination)
 
 
-def coverage(repo, cwd, out, report, command, cache, timeout=300, install_timeout=180, extra_inputs=(), use_cache=True):
+def report_scope(report, expected, repo, cwd):
+    """A passing suite/report is not evidence for omitted changed source files."""
+    if not expected:
+        return []
+    if report.suffix == ".json":
+        data = read_json(report)
+        if not isinstance(data, dict):
+            return list(expected)
+        names = set(data) - {"total"}
+        names.update(v["path"] for v in data.values() if isinstance(v, dict) and isinstance(v.get("path"), str))
+    elif report.suffix in (".info", ".lcov"):
+        names = {line[3:] for line in report.read_text().splitlines() if line.startswith("SF:")}
+    else:
+        lines = report.read_text().splitlines()
+        names = {line.rsplit(":", 1)[0] for line in lines[1:] if ":" in line}
+    present = set()
+    modules = {}
+    for source in expected:
+        for directory in (source.parent, *source.parent.parents):
+            if not directory.is_relative_to(repo):
+                break
+            mod = directory / "go.mod"
+            if mod.is_file():
+                match = re.search(r'^module\s+"?([^"\s]+)', mod.read_text(), re.M)
+                if match:
+                    modules[match[1]] = directory
+                break
+    for name in names:
+        candidate = pathlib.Path(name)
+        if candidate.is_absolute():
+            present.add(candidate.resolve())
+        else:
+            present.update((root / candidate).resolve() for root in (repo, cwd))
+            for module, root in modules.items():
+                if name.startswith(module + "/"):
+                    present.add((root / name[len(module) + 1:]).resolve())
+    return [str(p) for p in expected if p.resolve() not in present]
+
+
+def status(out, value):
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=out, delete=False) as f:
+        json.dump(value, f)
+        name = f.name
+    os.replace(name, out / "result.json")
+
+
+def coverage(repo, cwd, out, report, command, cache, timeout=300, install_timeout=180, extra_inputs=(), use_cache=True, expected_sources=(), plan=None):
     repo, cwd, out, report, cache = [pathlib.Path(p).resolve() for p in (repo, cwd, out, report, cache)]
     if not cwd.is_relative_to(repo) or out.is_relative_to(repo) or cache.is_relative_to(repo):
         raise ValueError("Run inside the worktree; put reports and caches outside it")
     if not report.is_relative_to(out):
         raise ValueError("Coverage report must be under --out")
     out.mkdir(parents=True, exist_ok=True)
+    expected = [(repo / p).resolve() for p in expected_sources]
+    if any(not p.is_relative_to(repo) or not p.is_file() for p in expected):
+        raise ValueError("Expected sources must be files inside the pinned repository")
+    if plan:
+        helper = pathlib.Path(__file__).resolve().parents[3] / "scripts/jest-coverage.js"
+        prepared = subprocess.run(["node", str(helper), str(repo), str(cwd), str(out), str(plan)], capture_output=True, text=True, timeout=15)
+        if prepared.returncode:
+            raise ValueError(prepared.stderr.strip())
+        spec = json.loads(prepared.stdout)
+        command, report = spec["command"], pathlib.Path(spec["report"])
+        expected = [pathlib.Path(p) for p in spec["expectedSources"]]
+    status(out, {"status": "running", "stage": "prepare"})
     files = tracked(repo)
     context = runtime(repo)
+    if plan:
+        context["jestPlanHash"] = hashlib.sha256(pathlib.Path(plan).read_bytes()).hexdigest()
+    context["expectedSources"] = [str(p.relative_to(repo)) for p in expected]
     # Include relevant runtime values without storing their plaintext in artifacts.
     volatile = {"PWD", "OLDPWD", "SHLVL", "_", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"}
     context["envHash"] = hashlib.sha256(json.dumps({k: v for k, v in sorted(os.environ.items()) if k not in volatile}).encode()).hexdigest()
+    status(out, {"status": "running", "stage": "install", "timeoutSeconds": install_timeout})
     deps = dependencies(repo, cache, out, install_timeout, files, context)
     if deps["status"] != "ok":
         return {"status": "unverified", "stage": "install", "dependency": deps}
@@ -182,12 +248,19 @@ def coverage(repo, cwd, out, report, command, cache, timeout=300, install_timeou
     if cacheable and metadata and (artifact / "report").is_file():
         report.parent.mkdir(parents=True, exist_ok=True)
         restore_report(artifact / "report", report, metadata["repoDir"], repo)
+        missing = report_scope(report, expected, repo, cwd)
+        if missing:
+            return {"status": "unverified", "stage": "scope", "missingSources": missing, "coverageFile": str(report)}
         return {"status": "ok", "coverageFile": str(report), "reused": True, "fingerprint": key, "dependency": deps}
     # A leftover report never counts as evidence of this command's success.
     report.unlink(missing_ok=True)
+    status(out, {"status": "running", "stage": "coverage", "timeoutSeconds": timeout})
     result = run(command, cwd, out / "coverage.log", timeout)
     if result["status"] != "ok" or not report.is_file():
         return {"status": "unverified", "stage": "coverage", "run": result, "reason": "suite failed, timed out or produced no report", "dependency": deps}
+    missing = report_scope(report, expected, repo, cwd)
+    if missing:
+        return {"status": "unverified", "stage": "scope", "missingSources": missing, "coverageFile": str(report), "dependency": deps}
     if cacheable:
         artifact.parent.mkdir(parents=True, exist_ok=True)
         staging = pathlib.Path(tempfile.mkdtemp(prefix="report-", dir=artifact.parent))
@@ -214,15 +287,35 @@ def main():
     parser.add_argument("--install-timeout", type=int, default=int(os.environ.get("REVIEW_PR_INSTALL_TIMEOUT_SECONDS", "180")))
     parser.add_argument("--input", action="append", default=[])
     parser.add_argument("--no-cache", action="store_true", help="Run coverage without report reuse when effective inputs are unknown")
+    parser.add_argument("--expected-sources", help="JSON array of repo-relative executable source paths this report must cover")
+    parser.add_argument("--jest-plan", help="JSON with runner argv, config, sourceFiles and testFiles; generates an exact Jest config")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    if not command or args.timeout < 1 or args.install_timeout < 1:
+    if (not command and not args.jest_plan) or args.timeout < 1 or args.install_timeout < 1:
         parser.error("Provide positive timeouts and a command after --")
-    try:
-        print(json.dumps(coverage(args.repo, args.cwd, args.out, args.report, command, args.cache_dir, args.timeout, args.install_timeout, args.input, not args.no_cache)))
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(json.dumps({"status": "unverified", "reason": str(error)}))
+    out = pathlib.Path(args.out).resolve()
+    if out.is_relative_to(pathlib.Path(args.repo).resolve()):
+        print(json.dumps({"status": "unverified", "reason": "Put coverage artifacts outside the repository"}))
+        return
+    out.mkdir(parents=True, exist_ok=True)
+    with (out / ".coverage.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(json.dumps({"status": "unverified", "reason": "coverage already running in this artifact directory"}))
+            return
+        started = time.monotonic()
+        try:
+            expected = json.loads(pathlib.Path(args.expected_sources).read_text()) if args.expected_sources else []
+            if not isinstance(expected, list) or any(not isinstance(p, str) for p in expected):
+                raise ValueError("Expected sources must be a JSON array of paths")
+            result = coverage(args.repo, args.cwd, out, args.report, command, args.cache_dir, args.timeout, args.install_timeout, args.input, not args.no_cache, expected, args.jest_plan)
+        except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            result = {"status": "unverified", "reason": str(error)}
+        result["durationMs"] = round((time.monotonic() - started) * 1000)
+        status(out, result)
+        print(json.dumps(result))
 
 
 if __name__ == "__main__":

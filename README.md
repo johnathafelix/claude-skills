@@ -68,7 +68,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; runs on a repo with no config only when explicitly asked (`--force`) |
 | `simplify-code` | Dispatch the `code-simplifier` agent to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
-| `code-review` | Report-only Opus review: standard groups all 15 angles into three source-reading passes; fast uses two groups, thorough retains separate angles plus a sweep. Independent verification batches four claims, prioritizes issues and caps calls at eight; missing/overflow verdicts remain explicit gaps. Canonical invariant keys deduplicate equivalent claims before verification. Reviews local branch/working-tree changes against the merge base, or a PR in a temporary worktree. Default standard/medium; thorough/high. Invoke as `/claude-skills:code-review`; the bare `/code-review` is Claude Code's built-in |
+| `code-review` | Report-only Opus review: standard groups all 15 angles into three source-reading passes; fast uses two groups, thorough groups all angles into five passes plus a bounded sweep. Independent verification batches four claims, prioritizes issues and caps calls at eight; missing/overflow verdicts remain explicit gaps. Structured symbol/invariant/trigger identities deduplicate equivalent claims across shifted lines before verification. Reviews local branch/working-tree changes against the merge base, or a PR in a temporary worktree. Default standard/medium; thorough/high. Invoke as `/claude-skills:code-review`; the bare `/code-review` is Claude Code's built-in |
 | `review-pr` | Review and post confirmed PR findings with grouped Opus code/language/test checks and one independent challenge queue. Default standard/medium; accepts fast/thorough, an effort, approve and full. Re-reviews use a pinned prior complete review's delta plus affected callers and independently recheck old findings; changed base, policy, history or broad configuration falls back to full. Coverage uses affected packages, isolated dependency caches and fingerprinted reports, with install/coverage limits of 180/300 seconds. Drafts plain comments directly, approves clean/nit-only reviews, reports gaps and preserves unresolved prior issues. With approve, posts findings and approves despite issues/gaps. Never approves own/draft/moved heads. Invoke `/claude-skills:review-pr <PR URL> [profile] [effort] [approve] [full]`. Defaults configurable through REVIEW_PR_PROFILE and REVIEW_PR_EFFORT; headless coordinator defaults to sonnet (REVIEW_PR_COORDINATOR_MODEL), review agents remain opus. Helpers store caches outside repos; REVIEW_PR_CACHE_DIR and REVIEW_PR_ARTIFACT_CACHE_DIR override locations |
 | `review-requests` | Watch teammates' requests using the existing Claude Slack connector and Haiku, with no Slack API token. Runs at most two headless reviews; queued PR URLs persist before the channel cursor advances, so a full queue never rereads old pages. Local completions/queue checks run every 30 seconds and GitHub watches every minute. Connector reads start every 5 minutes (REVIEW_REQUESTS_INTERVAL_MINUTES), backing off up to 30 minutes while idle (REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES); set both equal to disable backoff. Completion replies do not wait for a channel read. Re-reviews after a push settles for 10 minutes; the second review uses approve, and later pushes are approved without review. State/logs persist in ~/.claude/review-requests. Relay hooks/skills/project settings/memory are disabled, responses bounded, posts batched; token logs include all attempts. Needs REVIEW_REQUESTS_CHANNEL_ID and preferably REVIEW_REQUESTS_USER_ID. Invoke `/claude-skills:review-requests` once; closing the session stops the watch while detached reviews continue |
 | `ship-task` | Ship an approved task with fast, standard or thorough execution, task-only manifests, grouped quality checks, bounded in-scope remediation and evidence reuse. Cleanup runs before review/verification; commit and draft PR creation use a prepared description once |
@@ -170,8 +170,8 @@ MIT — see [LICENSE](./LICENSE).
 ## Shipping cost and validation
 
 `ship-task` selects a profile by task risk. The default standard review covers the
-existing angles in three related passes; thorough keeps individual reviewers and a
-sweep. Go source checks ordinarily use three groups (plus testing when scoped),
+existing angles in three related passes; thorough covers all angles in five related passes and a
+bounded fresh sweep. Go source checks ordinarily use three groups (plus testing when scoped),
 TypeScript two, and test quality two. Reviewer models remain opus. Each rule still
 has its own scope and proof anchors; failed rules retry once without repeating their
 successful siblings. Independent challengers share source context across four claims,
@@ -182,12 +182,17 @@ Pipeline finders focus on correctness and nits with concrete maintenance/testing
 standalone language checks retain their full style rules. Scope validation normalizes
 absolute and repo-relative paths within the pinned checkout. Rejected claims retain
 their validation errors and prevent complete cache reuse. Stage every review/check
-script with `stage-workflow.js` into the harness-provided scratchpad; use `-` instead
-of a guideline directory for code-review. `workflow-metrics.js` reads compact elapsed
+payload with `review-dispatch.js`; it stages exact scripts into a declared readable
+scratchpad or supplies unchanged inline bytes. Cached and GitHub prior claims join the
+independent queue, and missing prior verdicts block complete cache writes. `workflow-metrics.js` reads compact elapsed
 times and phase agent spans from completed harness metadata, without sandbox clocks.
 
 The task manifest helper stores a baseline and patches outside the repo, including
-new/deleted files and edits within pre-existing dirty files. It does not stage changes.
+new/deleted files and edits within pre-existing dirty files. It batches historical Git
+blob reads, scans content once and reuses unchanged patches; it does not stage changes.
+Scoped coverage validates all expected sources. Jest plans generate config arrays,
+preserve project setup and avoid CLI source-list parsing; one locked tracked task
+reports phase/result in JSON.
 Coverage/test evidence needs matching inputs rather than a recent timestamp. Workers'
 passing commands can be reused when those inputs remain unchanged.
 

@@ -1,4 +1,5 @@
 import importlib.util
+import fcntl
 import json
 import os
 import pathlib
@@ -93,6 +94,19 @@ class Repository(unittest.TestCase):
         self.assertFalse(self.prepare(profile='thorough')['incremental'])
         self.assertFalse(state.prepare(self.repo, self.head, self.head, self.url, self.cache)['incremental'])
         self.assertFalse(self.prepare(full=True)['incremental'])
+
+    def test_full_scope_and_profile_changes_keep_prior_claims_for_challenge(self):
+        finding = {'file': 'a.py', 'line': 2, 'verified': True, 'description': 'old claim', 'priorIds': ['old:one', 'old:two']}
+        self.remember([finding])
+        for options in ({'full': True}, {'profile': 'thorough'}):
+            context = self.prepare(**options)
+            self.assertFalse(context['incremental'])
+            self.assertEqual(len(context['priorFindings']), 1)
+            self.assertEqual(context['expectedPriorIds'], ['old:one', 'old:two'])
+            self.assertFalse(state.save(context, {'complete': True, 'findings': []})['saved'])
+            ids = context['expectedPriorIds']
+            self.assertTrue(state.save(context, {'complete': True, 'findings': [], 'priorClaims': {'expected': ids, 'challenged': ids, 'missing': []}})['saved'])
+            self.remember([finding])
 
     def test_lockfile_and_config_changes_force_full_scope(self):
         self.remember()
@@ -229,6 +243,47 @@ class Repository(unittest.TestCase):
     def test_timeout_stops_command_and_returns_gap(self):
         result = coverage.run([sys.executable, '-c', 'import time;time.sleep(10)'], self.repo, self.root / 'command.log', 0.05)
         self.assertEqual(result['status'], 'timeout')
+
+    def test_passing_report_missing_changed_sources_is_not_cached(self):
+        out = self.root / 'out'
+        report = out / 'coverage.json'
+        (self.repo / 'b.py').write_text('y = 1\n')
+        command = [sys.executable, '-c', 'import pathlib,sys,json;pathlib.Path(sys.argv[1]).write_text(json.dumps({sys.argv[2]: {"s":{"0":1}}}))', str(report), str(self.repo / 'a.py')]
+        with patch.object(coverage, 'runtime', return_value={'versions': {}}):
+            result = coverage.coverage(self.repo, self.repo, out, report, command, self.cache, expected_sources=['a.py', 'b.py'])
+        self.assertEqual(result['status'], 'unverified')
+        self.assertEqual(result['stage'], 'scope')
+        self.assertEqual(result['missingSources'], [str((self.repo / 'b.py').resolve())])
+        self.assertFalse((self.cache / 'coverage').exists())
+
+    def test_scoped_json_lcov_and_go_reports_match_expected_paths(self):
+        expected = [self.repo / 'a.py']
+        report = self.root / 'coverage.json'
+        report.write_text(json.dumps({str(expected[0]): {'s': {'0': 0}}}))
+        self.assertEqual(coverage.report_scope(report, expected, self.repo, self.repo), [])
+        report = self.root / 'lcov.info'
+        report.write_text('SF:a.py\nDA:1,0\nend_of_record\n')
+        self.assertEqual(coverage.report_scope(report, expected, self.repo, self.repo), [])
+        (self.repo / 'go.mod').write_text('module example.org/service\n')
+        report = self.root / 'coverage.out'
+        report.write_text('mode: atomic\nexample.org/service/a.py:1.1,2.1 1 0\n')
+        self.assertEqual(coverage.report_scope(report, expected, self.repo, self.repo), [])
+
+
+    def test_duplicate_coverage_command_preserves_the_active_status(self):
+        out = self.root / 'out'
+        out.mkdir()
+        active = {'status': 'running', 'stage': 'coverage'}
+        (out / 'result.json').write_text(json.dumps(active))
+        with (out / '.coverage.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = subprocess.run([sys.executable, str(PLUGIN / 'skills/review-pr/scripts/coverage.py'),
+                '--repo', str(self.repo), '--cwd', str(self.repo), '--out', str(out),
+                '--report', str(out / 'coverage.json'), '--', sys.executable, '-c', 'raise AssertionError("duplicate ran")'],
+                check=True, capture_output=True, text=True, timeout=5)
+        self.assertEqual(json.loads(result.stdout)['status'], 'unverified')
+        self.assertIn('already running', result.stdout)
+        self.assertEqual(json.loads((out / 'result.json').read_text()), active)
 
 
 class Watch(unittest.TestCase):

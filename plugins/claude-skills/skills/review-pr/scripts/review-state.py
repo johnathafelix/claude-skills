@@ -105,6 +105,15 @@ def relocate(repo, previous, head, finding):
     return finding
 
 
+def prior_id(finding):
+    if finding.get("priorId"):
+        return str(finding["priorId"])
+    if finding.get("priorIds"):
+        return str(finding["priorIds"][0])
+    value = json.dumps([finding.get("file"), finding.get("claimKey") or finding.get("description")], ensure_ascii=False, separators=(",", ":"))
+    return "cached:" + hashlib.sha256(value.encode()).hexdigest()[:20]
+
+
 def atomic_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as f:
@@ -130,6 +139,15 @@ def prepare(repo, base, head, url, cache_dir, plugin=PLUGIN, profile="standard",
     incremental = False
     delta = files
     prior_findings = []
+    # Full scope/profile changes invalidate reuse, not the obligation to recheck
+    # previous claims. Keep them even when no incremental review can be used.
+    if isinstance(prior, dict) and prior.get("url") == url and valid_findings(prior.get("findings")):
+        previous = prior.get("head", "")
+        available = bool(re.fullmatch(r"[0-9a-f]{40,64}", str(previous))) and git(repo, "cat-file", "-e", f"{previous}^{{commit}}", check=False).returncode == 0
+        for finding in prior["findings"]:
+            moved = relocate(repo, previous, head, finding) if available else {**finding, "needsRelocation": True}
+            moved["priorId"] = prior_id(finding)
+            prior_findings.append(moved)
     if full:
         reason = "full review requested"
     elif isinstance(prior, dict) and prior.get("complete") and prior.get("version") == VERSION:
@@ -149,7 +167,6 @@ def prepare(repo, base, head, url, cache_dir, plugin=PLUGIN, profile="standard",
             else:
                 incremental = True
                 reason = "review new delta and affected callers; recheck all prior findings"
-                prior_findings = [relocate(repo, prior["head"], head, f) for f in prior.get("findings", [])]
     # Include both sides of renames/deletions and prior findings, even outside the PR diff.
     review_files = sorted(set(delta) | {f["file"] for f in prior_findings if isinstance(f, dict) and isinstance(f.get("file"), str)})
     start = prior["head"] if incremental else merge_base
@@ -160,13 +177,19 @@ def prepare(repo, base, head, url, cache_dir, plugin=PLUGIN, profile="standard",
         "cachePath": str(stored), "incremental": incremental, "reason": reason,
         "files": files, "reviewFiles": review_files, "deltaFiles": delta,
         "priorFindings": prior_findings, "diffCommand": command,
+        "expectedPriorIds": list(dict.fromkeys(identifier for f in prior_findings
+            for identifier in [f["priorId"], *(f.get("priorIds") or [])] if isinstance(identifier, str))),
         "fullDiffCommand": shlex.join(["git", "-C", str(repo), "diff", merge_base, head]),
         "previousHead": prior.get("head") if isinstance(prior, dict) else None,
     }
 
 
 def save(context, report):
-    if not report.get("complete") or any(report.get(k) for k in ("dimensionsUnverified", "unverified", "unchallenged", "rejectedFindings")):
+    claims = report.get("priorClaims") or {}
+    expected = set(context.get("expectedPriorIds", [])) | set(claims.get("expected", []))
+    if expected - set(claims.get("challenged", [])) or claims.get("missing"):
+        return {"saved": False, "reason": "prior claims lack independent verdicts; prior cache retained"}
+    if not report.get("complete") or any(report.get(k) for k in ("dimensionsUnverified", "unverified", "unchallenged", "rejectedFindings", "inputGaps", "coverageUnverified")):
         return {"saved": False, "reason": "review incomplete; prior cache retained"}
     findings = report.get("findings")
     if not valid_findings(findings):
