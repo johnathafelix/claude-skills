@@ -169,7 +169,7 @@ missing things or producing weak output, check here first.
 
 | Model | Used for |
 |---|---|
-| **opus** | `planner`, `hard-worker` (renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
+| **opus** | `planner`, `hard-worker` (low effort; renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
 | **sonnet** | `lead-orchestrator`, `fast-worker`, the three checker agents, every `code-review` / `ts-check` / `test-check` / `golang-check` agent, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
 | **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
 | **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
