@@ -159,6 +159,65 @@ Claude Code does **not** let a plugin auto-install the main status line: `status
    "statusLine": { "type": "command", "command": "bash ~/.claude/statusline-command.sh" }
    ```
 
+## Model assignments — where to look when quality degrades
+
+Models were rebalanced for cost (see commits `5ed2b31`..`aa52a7c`). If a skill starts
+missing things or producing weak output, check here first.
+
+### Who runs on what
+
+| Model | Used for |
+|---|---|
+| **opus** | `planner`, `hard-worker` (renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
+| **sonnet** | `lead-orchestrator`, `fast-worker`, the three checker agents, every `code-review` / `ts-check` / `test-check` / `golang-check` agent, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
+| **haiku** | `git-commit`, `draft-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
+| **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
+
+A skill's `model:` sets the dispatcher only. A subagent launched without an explicit
+`model` inherits the caller's unless its own definition pins one.
+
+### Where the knobs live
+
+| What | File | Setting |
+|---|---|---|
+| Verify / challenge model and effort | `skills/address-pr-review-comments/verify-workflow.js` | `VERIFY_MODEL`, `CHALLENGE_MODEL`, `VERIFY_EFFORT`, `CHALLENGE_EFFORT`, `MAX_CHALLENGERS` |
+| `code-review` finders, sweep and verifiers | `skills/code-review/workflow.js` | `MODEL` |
+| `ts-check` / `test-check` / `golang-check` | `scripts/grouped-check-runtime.js` (check and verify calls), `agents/*-checker.md`, each skill's `SKILL.md` | `model:` |
+| Agent defaults | `agents/*.md` | `model:` |
+| Pinned planner / lead / executor models | `skills/ship-task/SKILL.md`, `skills/address-pr-review-comments/SKILL.md` | `model: "..."` in the `Agent` calls |
+| `review-requests` coordinator / Slack relay | `skills/review-requests/scripts/run-review.py`, `scripts/slack.py` | `REVIEW_PR_COORDINATOR_MODEL` (default `sonnet`), `--model haiku` |
+
+Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
+
+### Symptom → likely cause
+
+- **Reviews miss bugs or the findings look shallow** (`/code-review`, `/review-pr`,
+  `/ship-task` review passes): all review agents are sonnet now, so opus no longer judges
+  anything there. Raise `MODEL` in `code-review/workflow.js`, or run thorough / higher effort.
+- **Language or test checks miss rules or raise false positives**: the checker agents and
+  the shared runtime run sonnet. Raise `model:` in `grouped-check-runtime.js`.
+- **`address-pr-review-comments` returns thin `evidence`, parks too many threads as
+  `needs-user-input`, or wrongly rebuts a reviewer**: the verifier runs at `low` effort.
+  Raise `VERIFY_EFFORT` to `medium`. The challenger is shown the sibling root and the
+  repos the verifier checked so it can catch an unchecked cross-system contract.
+- **Many threads make that workflow expensive**: it runs one verifier and one challenger
+  per thread (challengers capped at `MAX_CHALLENGERS`); lower effort or the cap.
+- **`simplify-code` produces weak refactors**: the dispatcher is haiku and its `Agent`
+  call pins the `code-simplifier` subagent to sonnet. If that pin is removed, the
+  subagent inherits haiku.
+- **`format-prettier` reformats a repo with no prettier config**: it always passes
+  `--force`. The only guard is the "use PROACTIVELY only where prettier is declared"
+  sentence in its description.
+- **Poor commit messages or PR descriptions**: `git-commit`, `draft-pr` and
+  `update-pr-description` are haiku; revert the `model:` frontmatter line.
+
+### After changing any of this
+
+Edits take effect only after the plugin cache is refreshed: update the plugin, then
+`/reload-plugins` (other open sessions need it too). The cache lives in
+`~/.claude/plugins/cache/claude-skills/claude-skills/<sha>/`; one directory per installed
+commit, and `installed_plugins.json` names the active one.
+
 ## Notes for my own machines
 
 If you already wire these hooks manually in `~/.claude/settings.json` (pointing at `~/.claude/hooks/*.js`), **remove those entries after installing this plugin** — otherwise each hook fires twice. Likewise the loose skill copies in `~/.claude/skills/` become redundant once the plugin provides them.
