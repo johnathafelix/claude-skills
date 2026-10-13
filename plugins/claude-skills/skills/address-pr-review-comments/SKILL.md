@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: "Address PR review comments end to end, verification first — an opus verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (opus) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (sonnet) implements it, a dedicated high/sonnet code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
+description: "Address PR review comments end to end, verification first — an opus verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (opus) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus, low effort) implements it, a dedicated low-effort opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` (opus, low effort) applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -14,8 +14,8 @@ mistake into the codebase, so nothing gets planned until it survives verificatio
 The pipeline: fetch the unresolved threads → an opus verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (opus) drafts a fix plan and YOU gate it → `lead-orchestrator`
-(sonnet) implements → high/sonnet code review on the new code → `planner` fix plan and
-YOU gate it → `fast-worker` applies → `/compact-comments` → `/git-commit` → push →
+(opus, low effort) implements → low-effort opus code review on the new code → `planner` fix plan and
+YOU gate it → `fast-worker` (opus, low effort) applies → `/compact-comments` → `/git-commit` → push →
 `/update-pr-description` → one short reply per thread.
 
 Everything happens on the **current branch and its existing PR**. This skill never
@@ -240,9 +240,9 @@ rejection feedback.
 `.claude/plans/<YYYY-MM-DD>-pr-<PR_NUMBER>-review-fixes.md` (`date +%Y-%m-%d`; create the
 directory if needed). Record this path — Phases 6 and 7 need it.
 
-## Phase 5 — Implement, polling the lead (`lead-orchestrator`, sonnet)
+## Phase 5 — Implement, polling the lead (`lead-orchestrator`, opus, low effort)
 
-Spawn `claude-skills:lead-orchestrator` with `model: "sonnet"`, a `name` of `lead`, and **in
+Spawn `claude-skills:lead-orchestrator` with `model: "opus"`, `effort: "low"`, a `name` of `lead`, and **in
 the background** (`run_in_background: true` — the `Agent` tool backgrounds by default).
 Background is required so you can poll it; a blocking spawn would freeze this thread with
 no turn in which to poll or notice a stall. Phase 6 still gets the finished diff — you do
@@ -332,7 +332,7 @@ Still carry its `refuted`, `unchallenged`, and UNVERIFIED lists into the final m
 finding it dropped or could not verify is part of the report, not noise. Then continue to
 Phase 6.
 
-## Phase 6 — Code review (nested `Workflow`, high + sonnet)
+## Phase 6 — Code review (nested `Workflow`, low + opus)
 
 This reviews the code the pipeline just wrote, not the reviewer's comments.
 
@@ -361,7 +361,7 @@ node "<plugin>/scripts/stage-workflow.js" - "<absolute dir of this SKILL.md>/../
 ```
 Workflow({
   scriptPath: "<scratchpad>/code-review-workflow.js",
-  args: { files: <the diff list>, repoDir: <absolute repo root>, baseBranch: BASE_BRANCH, profile: "thorough", effort: "high", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
+  args: { files: <the diff list>, repoDir: <absolute repo root>, baseBranch: BASE_BRANCH, profile: "thorough", effort: "low", model: "opus", changeNote: "<one-line summary of what was fixed>", planPath: "<Phase 4d plan path>" },
 })
 ```
 
@@ -403,15 +403,15 @@ description), then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes
 - **Skip fixes** — apply nothing; go straight to 7c and record every finding and
   `TEST_FINDINGS` entry as *skipped by the user*.
 
-**7b — Apply (`fast-worker` / `hard-worker`, per task).** **One wave = one message containing that wave's
+**7b — Apply (`fast-worker` / `hard-worker`, per task, opus at low effort).** **One wave = one message containing that wave's
 `Agent` calls, every one with `run_in_background: false`.** That is the wave barrier:
 multiple calls in one message give concurrency within the wave, and
 `run_in_background: false` is what stops wave N+1 from dispatching before wave N's files
-exist. Cap at 5 concurrent. Each task goes to the executor the plan marks: `fast-worker`
-with `model: "sonnet"`, or `hard-worker` with `model: "opus"`.
+exist. Cap at 5 concurrent. Each task goes to the executor the plan marks, `fast-worker`
+or `hard-worker`, always with `model: "opus"` and `effort: "low"`.
 
 ```
-Agent({ subagent_type: "claude-skills:<executor>", model: "<sonnet|opus>", run_in_background: false, prompt: `
+Agent({ subagent_type: "claude-skills:<executor>", model: "opus", effort: "low", run_in_background: false, prompt: `
 Task: <task id and objective>
 Plan: read <absolute followup-plan path>, task <T-n> applies to you
 Files: <exact paths to touch>
@@ -438,7 +438,7 @@ Findings the user skipped at the 7a gate are not gaps: leave them out of the ver
 the remediation pass, and the guard below.
 
 On any gap, run exactly **one** remediation pass (`claude-skills:fast-worker`,
-`model: "sonnet"`, `run_in_background: false`) targeted at the specific gaps, then re-run
+`model: "opus"`, `effort: "low"`, `run_in_background: false`) targeted at the specific gaps, then re-run
 this check once. Do not loop beyond that.
 
 **Guard:** if the second check still reports an item as outright **failed** (not partial),

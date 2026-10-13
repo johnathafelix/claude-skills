@@ -8,6 +8,11 @@ async function runGroupedChecks(config) {
   const mode = input.mode || 'grouped'
   if (!['grouped', 'individual'].includes(mode)) throw new Error('mode must be grouped or individual')
   const nitInstructions = reviewNitPolicy(input.nitPolicy, 'all')
+  // Callers that omit model/effort keep the pinned sonnet checkers and their agent options.
+  const model = input.model === undefined ? 'sonnet' : input.model
+  if (!['sonnet', 'opus'].includes(model)) throw new Error('model must be sonnet or opus')
+  if (input.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(input.effort)) throw new Error('effort must be low, medium, high, xhigh or max')
+  const effortOption = input.effort === undefined ? {} : { effort: input.effort }
   const repoDir = input.repoDir || ''
   const norm = value => String(value ?? '').replace(/[–—―]/g, '-').replace(/→/g, '->').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()
   if (config.test && (![input.sourceFiles || [], input.testFiles || []].every(Array.isArray))) throw new Error('sourceFiles and testFiles must be arrays')
@@ -83,7 +88,7 @@ Proofs: for EACH guideline, run wc -l on its quoted absolute path; return {stem,
       stats.checkCalls++
       let result
       try {
-        result = await agent(prompt(pending), { label: `check:${group.name}${attempt ? ':retry' : ''}`, phase: 'Check', model: 'sonnet', agentType: config.agentType, schema })
+        result = await agent(prompt(pending), { label: `check:${group.name}${attempt ? ':retry' : ''}`, phase: 'Check', model, ...effortOption, agentType: config.agentType, schema })
       } catch (e) { log(`${group.name}: ${e.message || e}`) }
       if (!result) break // The harness already retries terminal API failures.
       const proofs = new Map((Array.isArray(result.guidelineProofs) ? result.guidelineProofs : []).filter(p => p && typeof p === 'object').map(p => [p.stem, p]))
@@ -175,7 +180,7 @@ Proofs: for EACH guideline, run wc -l on its quoted absolute path; return {stem,
       let result
       try {
         result = await agent(`MODE: verify. Independently attack every claim below, using the actual source/tests, guideline exceptions and coverage report. Read shared context once. Never edit. Return one verdict per id, confirming only claims independently demonstrated.\nManifest: ${input.changeManifestPath || '(none)'}\nCoverage: ${input.coverageFile || '(none)'}\nGuidelines: ${JSON.stringify(guidelines.map(g => ({ stem: g.stem, path: g.path })))}\nClaims: ${JSON.stringify(batch.map((f, id) => ({ id, ...f })))}`, {
-          label: `verify:batch:${index}`, phase: 'Verify', model: 'sonnet', agentType: config.agentType,
+          label: `verify:batch:${index}`, phase: 'Verify', model, ...effortOption, agentType: config.agentType,
           schema: { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array', items: { type: 'object', required: ['id', 'confirmed', 'reason'], properties: { id: { type: 'integer' }, confirmed: { type: 'boolean' }, reason: { type: 'string' } } } } } },
         })
       } catch (e) { log(`verify batch ${index}: ${e.message || e}`) }

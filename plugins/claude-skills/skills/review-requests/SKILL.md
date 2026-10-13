@@ -38,9 +38,9 @@ approval to reply in the channel under their account, and to post reviews throug
   requests can wait up to that idle interval; review completion replies still run on
   the 30-second local schedule. Set both intervals equal to disable idle backoff.
 - **Review effort (optional):** `REVIEW_PR_EFFORT` — `low`, `medium`, `high`, `xhigh`
-  or `max`. Default medium (high for thorough). REVIEW_PR_PROFILE defaults to standard;
+  or `max`. Default low. REVIEW_PR_PROFILE defaults to standard;
   fast and thorough are optional. REVIEW_PR_COORDINATOR_MODEL defaults to sonnet;
-  review/check/challenge agents use sonnet. Review sessions inherit these values.
+  review/check/challenge agents use opus. Review sessions inherit these values.
   Coverage/install limits and artifact caches are documented in review-pr.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
   cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else

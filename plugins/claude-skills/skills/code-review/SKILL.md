@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review local changes or a GitHub PR with grouped sonnet finders and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
+description: "Review local changes or a GitHub PR with grouped opus finders (low effort by default) and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
 argument-hint: "[fast|standard|thorough] [low|medium|high|xhigh|max] [PR URL]"
 ---
 
@@ -23,13 +23,13 @@ notification, then report.
 Split the arguments on whitespace. Tokens may come in any order:
 
 - `fast`, `standard`, `thorough` → `PROFILE`. Default `standard`.
-- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `medium` for fast/standard, `high` for thorough.
+- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `low` for every profile.
 - A URL matching `https://github.com/<owner>/<repo>/pull/<number>` → PR mode, with
   `OWNER`, `REPO`, `PR_NUMBER`.
 - Anything else → stop and show usage:
   `/claude-skills:code-review [fast|standard|thorough] [low|medium|high|xhigh|max] [https://github.com/<owner>/<repo>/pull/<n>]`.
 
-The model is always sonnet; the effort sets how hard every agent thinks.
+The model is always opus (passed to the workflow as `model: "opus"`); the effort sets how hard every agent thinks.
 
 ## Step 2a — Local mode (no URL)
 
@@ -47,7 +47,7 @@ Dedupe the two lists into `files` — the union matters, because a brand-new fil
 untracked and `--diff-filter=ACMD` alone misses it. If `files` is empty, report that there
 is nothing to review and stop.
 
-Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT,
+Workflow args: `{ files, baseBranch: BASE_BRANCH, profile: PROFILE, effort: EFFORT, model: "opus",
 repoDir: <absolute repo root>, diffCommand: "git diff <MERGE_BASE>" }`, substituting the pinned merge-base SHA. This
 includes working-tree changes without reviewing unrelated commits added to the base.
 
@@ -76,7 +76,7 @@ never touched.
    Empty → report nothing to review, clean up, and stop. If `STATE` is `MERGED`, say why:
    the PR's commits are already in `origin/<BASE>`, so there is no diff left to review.
 5. Workflow args:
-   `{ files, baseBranch: BASE, profile: PROFILE, effort: EFFORT, repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD", changeNote: "PR #<n>: <TITLE>" }`
+   `{ files, baseBranch: BASE, profile: PROFILE, effort: EFFORT, model: "opus", repoDir: WT, diffCommand: "git -C <WT> diff origin/<BASE>...HEAD", changeNote: "PR #<n>: <TITLE>" }`
    with `<WT>` and `<BASE>` substituted.
 6. **Always clean up** once the workflow finishes — also when it failed or was stopped:
 

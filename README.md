@@ -68,12 +68,12 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `humanizer` | Remove signs of AI-generated writing; make text sound human, direct, and concise (MIT, credit: [@blader](https://github.com/blader/humanizer)) |
 | `compact-comments` | Triage every comment added in the current PR: delete the ones that only restate the code, compact the rest into succinct 1-2 line comments. Doc comments on exported symbols, directives and ticket-bearing TODOs are never deleted. Scoped by default to comments added in the current PR; auto-invoked after comments are written |
 | `format-prettier` | Format files with `prettier --write`. Auto-invoked after edits in a repo that declares prettier; always runs with `--force`, so a repo with no config is formatted with prettier's defaults |
-| `simplify-code` | Dispatch the `code-simplifier` agent to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
-| `code-review` | Report-only Sonnet review: standard groups all 15 angles into three source-reading passes; fast uses two groups, thorough groups all angles into five passes plus a bounded sweep. Independent verification batches four claims, prioritizes issues and caps calls at eight; missing/overflow verdicts remain explicit gaps. Structured symbol/invariant/trigger identities deduplicate equivalent claims across shifted lines before verification. Reviews local branch/working-tree changes against the merge base, or a PR in a temporary worktree. Default standard/medium; thorough/high. Invoke as `/claude-skills:code-review`; the bare `/code-review` is Claude Code's built-in |
-| `review-pr` | Review and post confirmed PR findings with grouped Sonnet code review and language/test checks and one independent challenge queue. Default standard/medium; accepts fast/thorough, an effort, approve and full. Re-reviews use a pinned prior complete review's delta plus affected callers and independently recheck old findings; changed base, policy, history or broad configuration falls back to full. Coverage uses affected packages, isolated dependency caches and fingerprinted reports, with install/coverage limits of 180/300 seconds. Drafts plain comments directly, approves clean/nit-only reviews, reports gaps and preserves unresolved prior issues. With approve, posts findings and approves despite issues/gaps. Never approves own/draft/moved heads. Invoke `/claude-skills:review-pr <PR URL> [profile] [effort] [approve] [full]`. Defaults configurable through REVIEW_PR_PROFILE and REVIEW_PR_EFFORT; headless coordinator defaults to sonnet (REVIEW_PR_COORDINATOR_MODEL), review agents use sonnet. Helpers store caches outside repos; REVIEW_PR_CACHE_DIR and REVIEW_PR_ARTIFACT_CACHE_DIR override locations |
+| `simplify-code` | Dispatch the `code-simplifier` agent (opus, low effort) to simplify source for clarity and maintainability, preserving functionality. Claude invokes it on its own before finishing a nontrivial change or opening a PR; also runs directly via `/simplify-code` |
+| `code-review` | Report-only Opus review (low effort by default): standard groups all 15 angles into three source-reading passes; fast uses two groups, thorough groups all angles into five passes plus a bounded sweep. Independent verification batches four claims, prioritizes issues and caps calls at eight; missing/overflow verdicts remain explicit gaps. Structured symbol/invariant/trigger identities deduplicate equivalent claims across shifted lines before verification. Reviews local branch/working-tree changes against the merge base, or a PR in a temporary worktree. Default standard/low. Invoke as `/claude-skills:code-review`; the bare `/code-review` is Claude Code's built-in |
+| `review-pr` | Review and post confirmed PR findings with grouped Opus code review and language/test checks and one independent challenge queue. Default standard/low; accepts fast/thorough, an effort, approve and full. Re-reviews use a pinned prior complete review's delta plus affected callers and independently recheck old findings; changed base, policy, history or broad configuration falls back to full. Coverage uses affected packages, isolated dependency caches and fingerprinted reports, with install/coverage limits of 180/300 seconds. Drafts plain comments directly, approves clean/nit-only reviews, reports gaps and preserves unresolved prior issues. With approve, posts findings and approves despite issues/gaps. Never approves own/draft/moved heads. Invoke `/claude-skills:review-pr <PR URL> [profile] [effort] [approve] [full]`. Defaults configurable through REVIEW_PR_PROFILE and REVIEW_PR_EFFORT; headless coordinator defaults to sonnet (REVIEW_PR_COORDINATOR_MODEL), review and check agents use opus. Helpers store caches outside repos; REVIEW_PR_CACHE_DIR and REVIEW_PR_ARTIFACT_CACHE_DIR override locations |
 | `review-requests` | Watch teammates' requests using the existing Claude Slack connector and Haiku, with no Slack API token. Runs at most two headless reviews; queued PR URLs persist before the channel cursor advances, so a full queue never rereads old pages. Local completions/queue checks run every 30 seconds and GitHub watches every minute. Connector reads start every 5 minutes (REVIEW_REQUESTS_INTERVAL_MINUTES), backing off up to 30 minutes while idle (REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES); set both equal to disable backoff. Completion replies do not wait for a channel read. Re-reviews after a push settles for 10 minutes; the second review uses approve, and later pushes are approved without review. State/logs persist in ~/.claude/review-requests. Relay hooks/skills/project settings/memory are disabled, responses bounded, posts batched; token logs include all attempts. Needs REVIEW_REQUESTS_CHANNEL_ID and preferably REVIEW_REQUESTS_USER_ID. Invoke `/claude-skills:review-requests` once; closing the session stops the watch while detached reviews continue |
 | `ship-task` | Ship an approved task with fast, standard or thorough execution, task-only manifests, grouped quality checks, bounded in-scope remediation and evidence reuse. Cleanup runs before review/verification; commit and draft PR creation use a prepared description once |
-| `address-pr-review-comments` | Address a PR's review comments, verification first: an opus verifier (low effort) checks each comment against the codebase (widening to sibling repos for cross-system contracts) and an opus adversarial challenger (medium effort) attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
+| `address-pr-review-comments` | Address a PR's review comments, verification first: an opus verifier (low effort) checks each comment against the codebase (widening to sibling repos for cross-system contracts) and an opus adversarial challenger (medium effort) attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived (implementation lead, code review and executors run on opus at low effort) — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
 
 ### Hooks
 
@@ -169,8 +169,8 @@ missing things or producing weak output, check here first.
 
 | Model | Used for |
 |---|---|
-| **opus** | `planner` (medium effort), `hard-worker` (low effort; renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
-| **sonnet** | `lead-orchestrator`, `fast-worker`, the three checker agents, every `code-review` / `ts-check` / `test-check` / `golang-check` agent, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
+| **opus** | `planner` (medium effort), `hard-worker` (low effort; renamed from `deep-reasoner`), the `address-pr-review-comments` verifier + challenger, and — at low effort — every `code-review` / `review-pr` review and check agent, the `address-pr-review-comments` lead, code review and executors, and the `simplify-code` subagent |
+| **sonnet** | `lead-orchestrator` and `fast-worker` by default (opus where a skill above overrides them), the three checker agents, every standalone `ts-check` / `test-check` / `golang-check` agent, `ship-task`'s review passes, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
 | **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
 | **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
 
@@ -182,10 +182,10 @@ A skill's `model:` sets the dispatcher only. A subagent launched without an expl
 | What | File | Setting |
 |---|---|---|
 | Verify / challenge model and effort | `skills/address-pr-review-comments/verify-workflow.js` | `VERIFY_MODEL`, `CHALLENGE_MODEL`, `VERIFY_EFFORT`, `CHALLENGE_EFFORT`, `MAX_CHALLENGERS` |
-| `code-review` finders, sweep and verifiers | `skills/code-review/workflow.js` | `MODEL` |
-| `ts-check` / `test-check` / `golang-check` | `scripts/grouped-check-runtime.js` (check and verify calls), `agents/*-checker.md`, each skill's `SKILL.md` | `model:` |
+| `code-review` finders, sweep and verifiers | `skills/code-review/workflow.js` | `model` arg (default `sonnet`; `code-review`, `review-pr` and `address-pr-review-comments` pass `opus`) |
+| `ts-check` / `test-check` / `golang-check` | `scripts/grouped-check-runtime.js` (check and verify calls), `agents/*-checker.md`, each skill's `SKILL.md` | `model` / `effort` args (default `sonnet`, no effort; `review-pr` passes `opus`), `model:` |
 | Agent defaults | `agents/*.md` | `model:`, `effort:` |
-| Pinned planner / lead / executor models | `skills/ship-task/SKILL.md`, `skills/address-pr-review-comments/SKILL.md` | `model: "..."` in the `Agent` calls |
+| Pinned planner / lead / executor models | `skills/ship-task/SKILL.md`, `skills/address-pr-review-comments/SKILL.md`, `skills/simplify-code/SKILL.md` | `model: "..."`, `effort: "..."` in the `Agent` calls |
 | `review-requests` coordinator / Slack relay | `skills/review-requests/scripts/run-review.py`, `scripts/slack.py` | `REVIEW_PR_COORDINATOR_MODEL` (default `sonnet`), `--model haiku` |
 
 Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
@@ -193,10 +193,13 @@ Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
 ### Symptom → likely cause
 
 - **Reviews miss bugs or the findings look shallow** (`/code-review`, `/review-pr`,
-  `/ship-task` review passes): all review agents are sonnet now, so opus no longer judges
-  anything there. Raise `MODEL` in `code-review/workflow.js`, or run thorough / higher effort.
-- **Language or test checks miss rules or raise false positives**: the checker agents and
-  the shared runtime run sonnet. Raise `model:` in `grouped-check-runtime.js`.
+  `/address-pr-review-comments` Phase 6): they run opus at `low` effort. Pass a higher
+  effort (`/code-review high`, `REVIEW_PR_EFFORT`) or raise the `effort:` in the
+  address-pr Phase 6 args. `/ship-task` review passes still run sonnet; opt in by passing
+  `model: "opus"` in its workflow args.
+- **Language or test checks miss rules or raise false positives**: standalone `ts-check`,
+  `golang-check` and `test-check` run sonnet; `review-pr` runs them on opus at its review
+  effort. Raise `model` / `effort` in the args, or the default in `grouped-check-runtime.js`.
 - **`address-pr-review-comments` returns thin `evidence`, parks too many threads as
   `needs-user-input`, or wrongly rebuts a reviewer**: the verifier runs at `low` effort.
   Raise `VERIFY_EFFORT` to `medium`. The challenger is shown the sibling root and the
@@ -204,8 +207,8 @@ Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
 - **Many threads make that workflow expensive**: it runs one verifier and one challenger
   per thread (challengers capped at `MAX_CHALLENGERS`); lower effort or the cap.
 - **`simplify-code` produces weak refactors**: the dispatcher is haiku and its `Agent`
-  call pins the `code-simplifier` subagent to sonnet. If that pin is removed, the
-  subagent inherits haiku.
+  call pins the `code-simplifier` subagent to opus at low effort. Raise `effort:`; if the
+  pin is removed, the subagent inherits haiku.
 - **`format-prettier` reformats a repo with no prettier config**: it always passes
   `--force`. The only guard is the "use PROACTIVELY only where prettier is declared"
   sentence in its description.
@@ -232,7 +235,7 @@ MIT — see [LICENSE](./LICENSE).
 `ship-task` selects a profile by task risk. The default standard review covers the
 existing angles in three related passes; thorough covers all angles in five related passes and a
 bounded fresh sweep. Go source checks ordinarily use three groups (plus testing when scoped),
-TypeScript two, and test quality two. Reviewer and checker models are sonnet. Each rule still
+TypeScript two, and test quality two. Reviewer and checker models are sonnet in `ship-task` and the standalone checks; `code-review`, `review-pr` and `address-pr-review-comments` run opus at low effort. Each rule still
 has its own scope and proof anchors; failed rules retry once without repeating their
 successful siblings. Independent challengers share source context across four claims,
 with at most eight calls and four agents active. Overflow and missing verdicts remain

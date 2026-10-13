@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Sonnet review and language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
+description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Opus review (low effort by default) and language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
 argument-hint: "<PR URL> [fast|standard|thorough] [low|medium|high|xhigh|max] [approve] [full]"
 ---
 
@@ -17,8 +17,8 @@ large artifacts in scratchpad and report concise summaries.
 Accept one `https://github.com/<owner>/<repo>/pull/<number>` URL, an optional profile,
 effort, `approve` and `full`, in any order. Reject unknown/conflicting arguments with
 usage. `approve` sets FORCE_APPROVE; `full` disables incremental reuse. Profile defaults
-to REVIEW_PR_PROFILE or `standard`; effort to REVIEW_PR_EFFORT, else `medium` (`high`
-for thorough). Validate environment values against the choices above. Honor explicit
+to REVIEW_PR_PROFILE or `standard`; effort to REVIEW_PR_EFFORT, else `low`.
+Every review and check agent runs on opus (`model: "opus"` in the args below). Validate environment values against the choices above. Honor explicit
 profiles; otherwise escalate to thorough for authorization, concurrency, data migrations,
 broad public-contract changes or similarly material risk, explaining the choice.
 
@@ -77,7 +77,7 @@ their independent recheck. A tiny config diff still runs the selected core profi
 
 Run language/test checks with grouped defaults and the same pinned context. Dispatch
 independent check Workflows before waiting. Pass repo-relative paths and
-`repoDir: context.repoDir, diffCommand: context.diffCommand, nitPolicy: "material"`;
+`repoDir: context.repoDir, diffCommand: context.diffCommand, nitPolicy: "material", model: "opus", effort: EFFORT`;
 do not fetch/recompute another base. The runtime also normalizes absolute paths within
 the pinned checkout and rejects paths outside it.
 Read applicable siblings' **Scope** and **Stage and run** sections for guideline
@@ -149,7 +149,7 @@ Include every validated language/test candidate in the shared queue.
 Write core args to `<artifacts>/review-args.json` after candidate collection:
 
 ```text
-{ files: reviewFiles, baseBranch: BASE, profile: PROFILE, effort: EFFORT,
+{ files: reviewFiles, baseBranch: BASE, profile: PROFILE, effort: EFFORT, model: "opus",
   repoDir: context.repoDir, diffCommand: context.diffCommand, reviewContextPath: contextPath,
   nitPolicy: "material",
   coverageUnverified: <reason only when coverage unavailable>,
