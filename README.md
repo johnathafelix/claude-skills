@@ -56,6 +56,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 |---|---|
 | `git-commit` | Commit staged/unstaged changes with conventional messages |
 | `draft-pr` | Push unpushed commits and open a draft PR |
+| `create-pr` | Push unpushed commits and open a PR that is ready for review (same as `draft-pr`, minus `--draft`) |
 | `rebase-or-merge` | Rebase onto the PR base and push with `--force-with-lease`; on conflict, abort the rebase and fall back to merging the base in, resolving conflicts, verifying, pushing |
 | `update-pr-description` | Regenerate a PR description from its commits |
 | `grill-me` | Stress-test a plan or design with relentless questioning |
@@ -170,7 +171,7 @@ missing things or producing weak output, check here first.
 |---|---|
 | **opus** | `planner`, `hard-worker` (renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
 | **sonnet** | `lead-orchestrator`, `fast-worker`, the three checker agents, every `code-review` / `ts-check` / `test-check` / `golang-check` agent, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
-| **haiku** | `git-commit`, `draft-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
+| **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
 | **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
 
 A skill's `model:` sets the dispatcher only. A subagent launched without an explicit
@@ -208,7 +209,7 @@ Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
 - **`format-prettier` reformats a repo with no prettier config**: it always passes
   `--force`. The only guard is the "use PROACTIVELY only where prettier is declared"
   sentence in its description.
-- **Poor commit messages or PR descriptions**: `git-commit`, `draft-pr` and
+- **Poor commit messages or PR descriptions**: `git-commit`, `draft-pr`, `create-pr` and
   `update-pr-description` are haiku; revert the `model:` frontmatter line.
 
 ### After changing any of this

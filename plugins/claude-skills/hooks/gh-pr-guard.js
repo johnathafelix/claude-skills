@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * PreToolUse:Bash guard — blocks AI/Claude attribution from leaking into a PR
- * title or body, whether created via the draft-pr / update-pr-description skills
+ * title or body, whether created via the draft-pr / create-pr / update-pr-description skills
  * or by a direct `gh pr create` / `gh pr edit`.
  *
  * Fires only on `gh pr create` / `gh pr edit`. Checks, for forbidden attribution:
