@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: "Address PR review comments end to end, verification first — a opus verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (opus) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (sonnet) implements it, a dedicated high/sonnet code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
+description: "Address PR review comments end to end, verification first — an opus verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (opus) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (sonnet) implements it, a dedicated high/sonnet code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -11,7 +11,7 @@ Take a PR's review comments from "someone left feedback" to "fixed, pushed, and 
 wrong about the assumption behind it. Implementing a reviewer's mistake writes their
 mistake into the codebase, so nothing gets planned until it survives verification.
 
-The pipeline: fetch the unresolved threads → a opus verifier per comment (plus an
+The pipeline: fetch the unresolved threads → an opus verifier per comment (plus an
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (opus) drafts a fix plan and YOU gate it → `lead-orchestrator`
 (sonnet) implements → high/sonnet code review on the new code → `planner` fix plan and
@@ -126,7 +126,7 @@ If the working set is empty, STOP and report that there is nothing unresolved to
 **10** threads, list them and confirm with `AskUserQuestion` before dispatching — the same
 threshold `investigate-issue` uses before touching more than 10 repos.
 
-## Phase 2 — Verify (nested `Workflow`, opus + adversarial challenge)
+## Phase 2 — Verify (nested `Workflow`, opus verify (low effort) + opus adversarial challenge (medium effort))
 
 **Stage the script first.** `Workflow` rejects a `scriptPath` it did not itself return
 unless the file sits under the working directory or a directory added to the session.

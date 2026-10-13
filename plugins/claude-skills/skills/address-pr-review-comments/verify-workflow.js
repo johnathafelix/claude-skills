@@ -4,10 +4,14 @@ export const meta = {
   phases: [{ title: 'Verify' }, { title: 'Challenge' }],
 }
 
-// opus for both stages: this is the judgement call the whole skill is built around
-// — whether a human reviewer is actually right — so it does not get a cheap model.
-const MODEL = 'opus'
-const EFFORT = 'high'
+// Both stages run opus: whether a human reviewer is right is the call this skill is built
+// around. Cost is cut through effort instead — the verifier does a light first read at
+// low effort, and the challenger re-reads every cited location at medium effort, so a
+// shallow verdict is caught there rather than trusted downstream.
+const VERIFY_MODEL = 'opus'
+const CHALLENGE_MODEL = 'opus'
+const VERIFY_EFFORT = 'low'
+const CHALLENGE_EFFORT = 'medium'
 
 // Challengers run one per verdict. The skill's own Phase 1 already asks the user before
 // dispatching more than 10 threads, so this cap is a backstop for the case where the
@@ -161,7 +165,12 @@ ${(v.evidence || []).map(e => `- ${e}`).join('\n') || '- (none given)'}
 
 ${challengeTarget(v.verdict)}
 
-Read the real code at every location cited before you judge — a verdict resting on a citation that does not say what it claims is exactly what you are here to catch. Then answer:
+Read the real code at every location cited before you judge — a verdict resting on a citation that does not say what it claims is exactly what you are here to catch.
+
+Sibling repositories checked by the verifier: ${(v.siblingReposChecked || []).join(', ') || '(none)'}
+If the comment turns on a contract shared with another system (a payload field or type, endpoint path, HTTP method, status or error code, API schema, event shape, version compatibility, shared auth) and the verifier did not check the repository that owns it, that is a gap in the verdict: confirm \`${siblingRoot || '(no sibling root)'}/<name>\` exists with \`test -d\` and read it yourself${org ? ` (organization: ${org})` : ''}. Do not list or sweep the search root.
+
+Then answer:
 
 - \`agrees: true\` — you tried and could not break it; the verdict stands.
 - \`agrees: false\` — the verdict is wrong, and \`reason\` says concretely why, with file:line.
@@ -182,8 +191,8 @@ const results = await pipeline(
     agent(verifyPrompt(t), {
       label: `verify:${threadLabel(t, i)}`,
       phase: 'Verify',
-      model: MODEL,
-      effort: EFFORT,
+      model: VERIFY_MODEL,
+      effort: VERIFY_EFFORT,
       schema: VERDICT_SCHEMA,
     }),
   (verdict, t, i) => {
@@ -222,8 +231,8 @@ const results = await pipeline(
     return agent(challengePrompt(t, v), {
       label: `challenge:${threadLabel(t, i)}`,
       phase: 'Challenge',
-      model: MODEL,
-      effort: EFFORT,
+      model: CHALLENGE_MODEL,
+      effort: CHALLENGE_EFFORT,
       schema: CHALLENGE_SCHEMA,
     }).then(c => {
       // A challenger that returned nothing has not endorsed anything. Leave the verdict
