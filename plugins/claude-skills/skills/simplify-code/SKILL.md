@@ -1,7 +1,7 @@
 ---
 name: simplify-code
 description: Simplify source code for clarity, consistency, and maintainability while preserving all functionality — removes needless complexity, redundant variables, and inconsistent style. Use PROACTIVELY before finishing a nontrivial code change or opening a PR — pass the files you changed. Skip it for a trivial one-line edit. Also use whenever the user asks to simplify, clean up, or refactor code for readability, or invokes /simplify-code.
-model: sonnet
+model: haiku
 ---
 
 # Simplify Code
@@ -20,7 +20,8 @@ source code, preserving all functionality.
    If the scope is empty, report there is nothing to simplify and stop.
 
 2. **Dispatch.** Launch the `code-simplifier:code-simplifier` subagent (via the `Agent`
-   tool) with the exact file list from Step 1 and the instruction to preserve all
-   functionality and not expand scope beyond that list.
+   tool) with `model: "sonnet"` — this skill runs on haiku, and the subagent would
+   otherwise inherit it — the exact file list from Step 1, and the instruction to
+   preserve all functionality and not expand scope beyond that list.
 
 3. **Report** its findings/diff summary to the user.
