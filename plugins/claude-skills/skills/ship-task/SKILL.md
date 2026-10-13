@@ -29,8 +29,8 @@ Honor an explicit profile. Otherwise select and state:
 
 | Profile | Suitable task | Implementation | Review |
 |---|---|---|---|
-| fast | Small, clear change with a known verification command; no concurrency, auth, data migration or public contract risk | Main thread or one sonnet fast-worker | Two grouped opus passes, medium effort |
-| standard | Ordinary feature or fix, possibly across several files | One fable planner; main thread coordinates sonnet workers | Three grouped opus passes, medium effort |
+| fast | Small, clear change with a known verification command; no concurrency, auth, data migration or public contract risk | Main thread or one sonnet fast-worker | Two grouped sonnet passes, medium effort |
+| standard | Ordinary feature or fix, possibly across several files | One opus planner; main thread coordinates sonnet workers | Three grouped sonnet passes, medium effort |
 | thorough | Concurrency, security, migration, subtle shared invariants, broad API change, or explicit request | Planner plus sonnet lead; opus for difficult reasoning | Five grouped passes plus bounded fresh sweep, high effort |
 
 Fast still checks the applicable language and tests and independently challenges
@@ -40,7 +40,7 @@ A profile is a depth choice, not a claim that omitted angles ran.
 ## 2. Plan and approval
 
 For fast, draft a short plan yourself. For standard/thorough, call
-`claude-skills:planner` (`model: "fable"`, `run_in_background: false`) once with the
+`claude-skills:planner` (`model: "opus"`, `run_in_background: false`) once with the
 request, repo, profile, baseline dirt and intended scope. Ask for a concise plan with
 exact files, implementation tasks, verification commands and material risks. Thorough
 can use detailed waves. Do not demand architecture boilerplate for a local edit.
@@ -84,7 +84,7 @@ Standard: coordinate tasks directly; use workers only for distinct useful work p
 Thorough: dispatch `claude-skills:lead-orchestrator` with `model: "sonnet"`, approved plan,
 profile, manifest/helper locations and the watchdog instructions in `references/watchdog.md`.
 Use `run_in_background: true`; tell it explicitly to send `main` its completion report.
-Use opus deep-reasoner only for a difficult decision; a second opinion needs a concrete
+Use opus hard-worker only for a difficult decision; a second opinion needs a concrete
 unresolved question. Disjoint files can run concurrently; dependent tasks run in order.
 
 Pass workers the relevant plan section, files, conventions and verification command.

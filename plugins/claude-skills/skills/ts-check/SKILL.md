@@ -1,7 +1,7 @@
 ---
 name: ts-check
-description: "Report TypeScript quality findings using two read-only opus reviewer groups and short decision checklists. Checks strong types, magic values, data-driven design, object parameters and redundant bindings. Use for /ts-check or a TypeScript quality review; fixes require authorization."
-model: opus
+description: "Report TypeScript quality findings using two read-only sonnet reviewer groups and short decision checklists. Checks strong types, magic values, data-driven design, object parameters and redundant bindings. Use for /ts-check or a TypeScript quality review; fixes require authorization."
+model: sonnet
 ---
 
 # TypeScript Check
@@ -43,7 +43,7 @@ Standalone checks retain all style rules; pipelines pass nitPolicy: "material" t
 each pass to two nits with concrete cost, preserving correctness findings.
 The script accepts an object or JSON args string. Default `mode: "grouped"`; request
 `"individual"` for thorough isolated checks. Grouping preserves every applicable rule.
-Restricted opus checkers share source reads within a group, at most four in flight.
+Restricted sonnet checkers share source reads within a group, at most four in flight.
 Each rule requires line-count/first/last-line anchors; these detect missing or wrong
 reads, not comprehension. Retry a failed rule once, retaining successful siblings.
 Terminal API failures already retried by the harness do not trigger another loop.

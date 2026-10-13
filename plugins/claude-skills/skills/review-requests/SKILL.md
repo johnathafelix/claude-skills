@@ -40,7 +40,7 @@ approval to reply in the channel under their account, and to post reviews throug
 - **Review effort (optional):** `REVIEW_PR_EFFORT` — `low`, `medium`, `high`, `xhigh`
   or `max`. Default medium (high for thorough). REVIEW_PR_PROFILE defaults to standard;
   fast and thorough are optional. REVIEW_PR_COORDINATOR_MODEL defaults to sonnet;
-  checker/reviewer/challenger agents remain opus. Review sessions inherit these values.
+  review/check/challenge agents use sonnet. Review sessions inherit these values.
   Coverage/install limits and artifact caches are documented in review-pr.
 - **Local clones:** each PR's repo lives at `<REPOS_DIR>/<repo>`, and a missing one is
   cloned there on first use. `REPOS_DIR` is `REVIEW_REQUESTS_REPOS_DIR` if set, else

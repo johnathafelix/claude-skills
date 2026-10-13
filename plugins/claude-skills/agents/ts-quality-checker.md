@@ -1,7 +1,7 @@
 ---
 name: ts-quality-checker
 description: "Read-only TypeScript checker. Applies supplied guideline groups with shared source reads and per-rule findings/proofs. Restricted to analysis tools; used by the matching quality-check workflow."
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 

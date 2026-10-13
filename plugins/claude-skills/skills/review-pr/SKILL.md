@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Opus review, language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
+description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Sonnet review and language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
 argument-hint: "<PR URL> [fast|standard|thorough] [low|medium|high|xhigh|max] [approve] [full]"
 ---
 

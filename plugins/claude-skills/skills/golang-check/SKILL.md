@@ -1,7 +1,7 @@
 ---
 name: golang-check
-description: "Report Go idiom and correctness findings on changed code using related guideline groups and restricted read-only opus checkers. Preserves per-module version gates, severity and confidence. Use for /golang-check or a Go quality review; edits only when separately requested."
-model: opus
+description: "Report Go idiom and correctness findings on changed code using related guideline groups and restricted read-only sonnet checkers. Preserves per-module version gates, severity and confidence. Use for /golang-check or a Go quality review; edits only when separately requested."
+model: sonnet
 ---
 
 # Go Check
@@ -55,7 +55,7 @@ Standalone checks retain all style rules; pipelines pass nitPolicy: "material" t
 each pass to two nits with concrete cost, preserving correctness findings.
 The script accepts an object or JSON args string. Default `mode: "grouped"`; request
 `"individual"` for thorough isolated checks. Grouping preserves every applicable rule.
-Restricted opus checkers share source reads within a group, at most four in flight.
+Restricted sonnet checkers share source reads within a group, at most four in flight.
 Each rule requires line-count/first/last-line anchors; these detect missing or wrong
 reads, not comprehension. Retry a failed rule once, retaining successful siblings.
 Terminal API failures already retried by the harness do not trigger another loop.

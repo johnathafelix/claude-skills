@@ -7,7 +7,7 @@ notification arrives. Holding stdin open in stream-json mode keeps the session a
 for those turns, so this waits until a turn ends with the REVIEW_RESULT line.
 
 The coordinator defaults to sonnet (REVIEW_PR_COORDINATOR_MODEL overrides it).
-Review/check/challenge agents still explicitly use opus. The plugin containing this
+Review/check/challenge agents still explicitly use sonnet. The plugin containing this
 script is loaded directly, avoiding a stale installed copy when run from a checkout.
 
 Run from the PR repo's clone. Prints {"result": "<last turn's text>", "model_usage": {...},

@@ -1,7 +1,7 @@
 ---
 name: test-checker
 description: "Read-only test-quality checker. Applies supplied guideline groups with shared source reads and per-rule findings/proofs. Restricted to analysis tools; used by the matching quality-check workflow. Independently challenges a bounded batch in verify mode."
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 

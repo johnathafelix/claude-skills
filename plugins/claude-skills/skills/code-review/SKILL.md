@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review local changes or a GitHub PR with grouped opus finders and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
+description: "Review local changes or a GitHub PR with grouped sonnet finders and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
 argument-hint: "[fast|standard|thorough] [low|medium|high|xhigh|max] [PR URL]"
 ---
 
@@ -29,7 +29,7 @@ Split the arguments on whitespace. Tokens may come in any order:
 - Anything else → stop and show usage:
   `/claude-skills:code-review [fast|standard|thorough] [low|medium|high|xhigh|max] [https://github.com/<owner>/<repo>/pull/<n>]`.
 
-The model is always opus; the effort sets how hard every agent thinks.
+The model is always sonnet; the effort sets how hard every agent thinks.
 
 ## Step 2a — Local mode (no URL)
 

@@ -83,7 +83,7 @@ Proofs: for EACH guideline, run wc -l on its quoted absolute path; return {stem,
       stats.checkCalls++
       let result
       try {
-        result = await agent(prompt(pending), { label: `check:${group.name}${attempt ? ':retry' : ''}`, phase: 'Check', model: 'opus', agentType: config.agentType, schema })
+        result = await agent(prompt(pending), { label: `check:${group.name}${attempt ? ':retry' : ''}`, phase: 'Check', model: 'sonnet', agentType: config.agentType, schema })
       } catch (e) { log(`${group.name}: ${e.message || e}`) }
       if (!result) break // The harness already retries terminal API failures.
       const proofs = new Map((Array.isArray(result.guidelineProofs) ? result.guidelineProofs : []).filter(p => p && typeof p === 'object').map(p => [p.stem, p]))
@@ -175,7 +175,7 @@ Proofs: for EACH guideline, run wc -l on its quoted absolute path; return {stem,
       let result
       try {
         result = await agent(`MODE: verify. Independently attack every claim below, using the actual source/tests, guideline exceptions and coverage report. Read shared context once. Never edit. Return one verdict per id, confirming only claims independently demonstrated.\nManifest: ${input.changeManifestPath || '(none)'}\nCoverage: ${input.coverageFile || '(none)'}\nGuidelines: ${JSON.stringify(guidelines.map(g => ({ stem: g.stem, path: g.path })))}\nClaims: ${JSON.stringify(batch.map((f, id) => ({ id, ...f })))}`, {
-          label: `verify:batch:${index}`, phase: 'Verify', model: 'opus', agentType: config.agentType,
+          label: `verify:batch:${index}`, phase: 'Verify', model: 'sonnet', agentType: config.agentType,
           schema: { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array', items: { type: 'object', required: ['id', 'confirmed', 'reason'], properties: { id: { type: 'integer' }, confirmed: { type: 'boolean' }, reason: { type: 'string' } } } } } },
         })
       } catch (e) { log(`verify batch ${index}: ${e.message || e}`) }

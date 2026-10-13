@@ -1,6 +1,6 @@
 export const meta = {
   name: 'code-review',
-  description: 'Grouped opus review with bounded independent verification; thorough mode adds a sweep',
+  description: 'Grouped sonnet review with bounded independent verification; thorough mode adds a sweep',
   phases: [{ title: 'Find' }, { title: 'Verify' }, { title: 'Sweep' }],
 }
 
@@ -8,7 +8,7 @@ export const meta = {
 // Why not the built-in /code-review: a pipeline cannot invoke a slash command, and the
 // Agent tool has `model` but no `effort`. Only agent() calls in a Workflow can pin both,
 // so every call below does. Angles and sweep are adapted from the built-in's max recipe.
-const MODEL = 'opus'
+const MODEL = 'sonnet'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // REVIEW_INPUT_RUNTIME
 

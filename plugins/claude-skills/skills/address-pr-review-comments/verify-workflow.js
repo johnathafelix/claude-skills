@@ -4,9 +4,9 @@ export const meta = {
   phases: [{ title: 'Verify' }, { title: 'Challenge' }],
 }
 
-// fable for both stages: this is the judgement call the whole skill is built around
+// opus for both stages: this is the judgement call the whole skill is built around
 // — whether a human reviewer is actually right — so it does not get a cheap model.
-const MODEL = 'fable'
+const MODEL = 'opus'
 const EFFORT = 'high'
 
 // Challengers run one per verdict. The skill's own Phase 1 already asks the user before
