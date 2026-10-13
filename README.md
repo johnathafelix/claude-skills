@@ -169,10 +169,10 @@ missing things or producing weak output, check here first.
 
 | Model | Used for |
 |---|---|
-| **opus** | `planner` (medium effort), `hard-worker` (low effort; renamed from `deep-reasoner`), the `address-pr-review-comments` verifier + challenger, and — at low effort — every `code-review` / `review-pr` review and check agent, the `address-pr-review-comments` lead, code review and executors, and the `simplify-code` subagent |
-| **sonnet** | `lead-orchestrator` and `fast-worker` by default (opus where a skill above overrides them), the three checker agents, every standalone `ts-check` / `test-check` / `golang-check` agent, `ship-task`'s review passes, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
+| **opus** | `planner` (medium effort), `hard-worker` (low effort; renamed from `deep-reasoner`), the `address-pr-review-comments` verifier + challenger, and — at low effort — `check-rest-api-design` (and its sub-agents), `grill-me`, every `code-review` / `review-pr` review and check agent, the `address-pr-review-comments` lead, code review and executors, and the `simplify-code` subagent |
+| **sonnet** | `lead-orchestrator` and `fast-worker` by default (opus where a skill above overrides them), the three checker agents, every standalone `ts-check` / `test-check` / `golang-check` agent, `ship-task`'s review passes, `tdd` and `humanizer` (both at high effort), `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
 | **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
-| **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
+| **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review` |
 
 A skill's `model:` sets the dispatcher only. A subagent launched without an explicit
 `model` inherits the caller's unless its own definition pins one.

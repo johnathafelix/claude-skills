@@ -11,6 +11,8 @@ description: |
   excessive conjunctive phrases.
 
   Credits: Original skill by @blader - https://github.com/blader/humanizer
+model: sonnet
+effort: high
 allowed-tools:
   - Read
   - Write
