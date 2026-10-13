@@ -169,7 +169,7 @@ missing things or producing weak output, check here first.
 
 | Model | Used for |
 |---|---|
-| **opus** | `planner`, `hard-worker` (low effort; renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
+| **opus** | `planner` (medium effort), `hard-worker` (low effort; renamed from `deep-reasoner`), and the `address-pr-review-comments` verifier + challenger |
 | **sonnet** | `lead-orchestrator`, `fast-worker`, the three checker agents, every `code-review` / `ts-check` / `test-check` / `golang-check` agent, `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
 | **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
 | **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review`, `check-rest-api-design`, `grill-me`, `humanizer`, `tdd` |
@@ -184,7 +184,7 @@ A skill's `model:` sets the dispatcher only. A subagent launched without an expl
 | Verify / challenge model and effort | `skills/address-pr-review-comments/verify-workflow.js` | `VERIFY_MODEL`, `CHALLENGE_MODEL`, `VERIFY_EFFORT`, `CHALLENGE_EFFORT`, `MAX_CHALLENGERS` |
 | `code-review` finders, sweep and verifiers | `skills/code-review/workflow.js` | `MODEL` |
 | `ts-check` / `test-check` / `golang-check` | `scripts/grouped-check-runtime.js` (check and verify calls), `agents/*-checker.md`, each skill's `SKILL.md` | `model:` |
-| Agent defaults | `agents/*.md` | `model:` |
+| Agent defaults | `agents/*.md` | `model:`, `effort:` |
 | Pinned planner / lead / executor models | `skills/ship-task/SKILL.md`, `skills/address-pr-review-comments/SKILL.md` | `model: "..."` in the `Agent` calls |
 | `review-requests` coordinator / Slack relay | `skills/review-requests/scripts/run-review.py`, `scripts/slack.py` | `REVIEW_PR_COORDINATOR_MODEL` (default `sonnet`), `--model haiku` |
 
