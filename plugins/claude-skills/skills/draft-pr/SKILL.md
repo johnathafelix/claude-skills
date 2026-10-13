@@ -2,7 +2,7 @@
 name: draft-pr
 description: "Push unpushed local commits to remote and create a draft PR, optionally using a prepared description. Use when the user wants to quickly open a draft pull request."
 allowed-tools: Bash
-model: sonnet
+model: haiku
 ---
 
 # Draft PR Skill
