@@ -73,7 +73,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 | `review-pr` | Review and post confirmed PR findings with grouped Opus code review and language/test checks and one independent challenge queue. Default standard/medium (high for thorough); accepts fast/thorough, an effort, approve and full. Re-reviews use a pinned prior complete review's delta plus affected callers and independently recheck old findings; changed base, policy, history or broad configuration falls back to full. Coverage uses affected packages, isolated dependency caches and fingerprinted reports, with install/coverage limits of 180/300 seconds. Drafts plain comments directly, approves clean/nit-only reviews, reports gaps and preserves unresolved prior issues. With approve, posts findings and approves despite issues/gaps. Never approves own/draft/moved heads. Invoke `/claude-skills:review-pr <PR URL> [profile] [effort] [approve] [full]`. Defaults configurable through REVIEW_PR_PROFILE and REVIEW_PR_EFFORT; headless coordinator defaults to sonnet (REVIEW_PR_COORDINATOR_MODEL), review and check agents use opus. Helpers store caches outside repos; REVIEW_PR_CACHE_DIR and REVIEW_PR_ARTIFACT_CACHE_DIR override locations |
 | `review-requests` | Watch teammates' requests using the existing Claude Slack connector and Haiku, with no Slack API token. Runs at most two headless reviews; queued PR URLs persist before the channel cursor advances, so a full queue never rereads old pages. Local completions/queue checks run every 30 seconds and GitHub watches every minute. Connector reads start every 5 minutes (REVIEW_REQUESTS_INTERVAL_MINUTES), backing off up to 30 minutes while idle (REVIEW_REQUESTS_MAX_IDLE_INTERVAL_MINUTES); set both equal to disable backoff. Completion replies do not wait for a channel read. Re-reviews after a push settles for 10 minutes; the second review uses approve, and later pushes are approved without review. State/logs persist in ~/.claude/review-requests. Relay hooks/skills/project settings/memory are disabled, responses bounded, posts batched; token logs include all attempts. Needs REVIEW_REQUESTS_CHANNEL_ID and preferably REVIEW_REQUESTS_USER_ID. Invoke `/claude-skills:review-requests` once; closing the session stops the watch while detached reviews continue |
 | `ship-task` | Ship an approved task with fast, standard or thorough execution, task-only manifests, grouped quality checks, bounded in-scope remediation and evidence reuse. Cleanup runs before review/verification; commit and draft PR creation use a prepared description once |
-| `address-pr-review-comments` | Address a PR's review comments, verification first: a fable verifier (high effort) checks each comment against the codebase (widening to sibling repos for cross-system contracts) and a fable adversarial challenger (high effort) attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived (fable planner; implementation lead on opus at medium effort, executors on opus at low effort, code review on opus at high effort) — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
+| `address-pr-review-comments` | Address a PR's review comments, verification first: a fable verifier (high effort) checks each comment against the codebase (widening to sibling repos for cross-system contracts) and an opus adversarial challenger (high effort) attacks every verdict, the user settles what the code can't, then the `ship-task` pipeline fixes what survived (fable planner; implementation lead on opus at medium effort, executors on sonnet at medium effort (`fast-worker`) or opus at high effort (`hard-worker`), code review on opus at high effort) — pushed to the same branch, with a short reply posted in each thread (the fix, or why the reviewer was wrong) |
 
 ### Hooks
 
@@ -169,10 +169,10 @@ missing things or producing weak output, check here first.
 
 | Model | Used for |
 |---|---|
-| **fable** | `planner` (high effort) and the `address-pr-review-comments` verifier + challenger (high effort) |
-| **opus** | `hard-worker` (medium effort; renamed from `deep-reasoner`); every `code-review` / `review-pr` / `ship-task` review agent (medium effort, high for thorough) and the `address-pr-review-comments` code review (high); every grouped check agent (high effort by default; `review-pr` passes its review effort); `check-rest-api-design` (and its sub-agents) and the `simplify-code` subagent (medium effort); `lead-orchestrator` everywhere (medium effort); `grill-me` and the `address-pr-review-comments` executors (low effort); the `address-pr-review-comments` final check (high effort) |
-| **sonnet** | `fast-worker` by default (opus where a skill above overrides it), the three checker agents' own frontmatter (the grouped-check runtime overrides it), the `ts-check` / `test-check` / `golang-check` dispatchers, `tdd` and `humanizer` (both at high effort), `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
-| **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `update-pr-description`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
+| **fable** | `planner` (high effort) and the `address-pr-review-comments` verifier (high effort) |
+| **opus** | `hard-worker` (high effort; renamed from `deep-reasoner`); the `address-pr-review-comments` challenger (high effort); every `code-review` / `review-pr` / `ship-task` review agent (medium effort, high for thorough) and the `address-pr-review-comments` code review (high); every grouped check agent (high effort by default; `ship-task` passes medium for fast/standard and high for thorough, `review-pr` passes its review effort); `check-rest-api-design` (and its sub-agents) and the `simplify-code` subagent (medium effort); `lead-orchestrator` everywhere (medium effort); `grill-me` (medium effort); the `address-pr-review-comments` final check (high effort) |
+| **sonnet** | `fast-worker` by default (opus where a skill above overrides it), `update-pr-description`, the three checker agents' own frontmatter (the grouped-check runtime overrides it), the `ts-check` / `test-check` / `golang-check` dispatchers, `tdd` and `humanizer` (both at high effort), `compact-comments`, `rebase-or-merge`, and the `review-requests` review-session coordinator |
+| **haiku** | `git-commit`, `draft-pr`, `create-pr`, `format-prettier`, `simplify-code` (dispatcher only), and the `review-requests` Slack relay |
 | **session model** | Skills with no `model:` run their main thread on whatever your session uses: `ship-task`, `review-pr`, `review-requests`, `address-pr-review-comments`, `code-review` |
 
 A skill's `model:` sets the dispatcher only. A subagent launched without an explicit
@@ -200,8 +200,8 @@ Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
 - **Language or test checks miss rules or raise false positives**: check agents run opus
   at `high` effort by default; `review-pr` runs them on opus at its review effort. Raise `model` / `effort` in the args, or the default in `grouped-check-runtime.js`.
 - **`address-pr-review-comments` returns thin `evidence`, parks too many threads as
-  `needs-user-input`, or wrongly rebuts a reviewer**: the verifier and challenger run
-  fable at `high` effort. Raise `VERIFY_EFFORT` / `CHALLENGE_EFFORT` further. The challenger is shown the sibling root and the
+  `needs-user-input`, or wrongly rebuts a reviewer**: the verifier runs fable and the
+  challenger opus, both at `high` effort. Raise `VERIFY_EFFORT` / `CHALLENGE_EFFORT` further. The challenger is shown the sibling root and the
   repos the verifier checked so it can catch an unchecked cross-system contract.
 - **Many threads make that workflow expensive**: it runs one verifier and one challenger
   per thread (challengers capped at `MAX_CHALLENGERS`); lower effort or the cap.
@@ -211,8 +211,8 @@ Effort accepts `low`, `medium`, `high`, `xhigh`, `max`.
 - **`format-prettier` reformats a repo with no prettier config**: it always passes
   `--force`. The only guard is the "use PROACTIVELY only where prettier is declared"
   sentence in its description.
-- **Poor commit messages or PR descriptions**: `git-commit`, `draft-pr`, `create-pr` and
-  `update-pr-description` are haiku; revert the `model:` frontmatter line.
+- **Poor commit messages or PR descriptions**: `git-commit`, `draft-pr` and `create-pr`
+  are haiku (`update-pr-description` is sonnet); revert the `model:` frontmatter line.
 
 ### After changing any of this
 

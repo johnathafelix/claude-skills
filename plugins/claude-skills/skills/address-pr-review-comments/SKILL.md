@@ -1,6 +1,6 @@
 ---
 name: address-pr-review-comments
-description: "Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus, medium effort) implements it, a dedicated high-effort opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` (opus, low effort) applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
+description: "Address PR review comments end to end, verification first — a fable verifier checks every comment against the codebase (widening to sibling repos for cross-system contracts) and an adversarial challenger attacks each verdict, the user settles anything the code cannot, `planner` (fable) drafts a fix plan that the skill gates with the user, `lead-orchestrator` (opus, medium effort) implements it, a dedicated high-effort opus code review runs on the new code, `planner` drafts a fix plan the user approves, `fast-worker` (sonnet, medium effort) or `hard-worker` (opus, high effort) applies it, then the work is committed to the same branch and a short reply is posted in each review thread — the fix, or why the reviewer's reasoning does not hold. Run it from plan mode. Use when the user invokes /address-pr-review-comments."
 argument-hint: "[review comments to address, or empty to fetch them from the PR]"
 ---
 
@@ -15,7 +15,7 @@ The pipeline: fetch the unresolved threads → a fable verifier per comment (plu
 adversarial challenger on every verdict) → ask the user about anything the code cannot
 settle → `planner` (fable) drafts a fix plan and YOU gate it → `lead-orchestrator`
 (opus, medium effort) implements → high-effort opus code review on the new code → `planner` fix plan and
-YOU gate it → `fast-worker` (opus, low effort) applies → `/compact-comments` → `/git-commit` → push →
+YOU gate it → `fast-worker` (sonnet, medium effort) / `hard-worker` (opus, high effort) applies → `/compact-comments` → `/git-commit` → push →
 `/update-pr-description` → one short reply per thread.
 
 Everything happens on the **current branch and its existing PR**. This skill never
@@ -126,7 +126,7 @@ If the working set is empty, STOP and report that there is nothing unresolved to
 **10** threads, list them and confirm with `AskUserQuestion` before dispatching — the same
 threshold `investigate-issue` uses before touching more than 10 repos.
 
-## Phase 2 — Verify (nested `Workflow`, fable verify + fable adversarial challenge, both high effort)
+## Phase 2 — Verify (nested `Workflow`, fable verify + opus adversarial challenge, both high effort)
 
 **Stage the script first.** `Workflow` rejects a `scriptPath` it did not itself return
 unless the file sits under the working directory or a directory added to the session.
@@ -403,15 +403,15 @@ description), then `AskUserQuestion`: *Approve fixes plan* / *Revise (type notes
 - **Skip fixes** — apply nothing; go straight to 7c and record every finding and
   `TEST_FINDINGS` entry as *skipped by the user*.
 
-**7b — Apply (`fast-worker` / `hard-worker`, per task, opus at low effort).** **One wave = one message containing that wave's
+**7b — Apply (`fast-worker` on sonnet at medium effort / `hard-worker` on opus at high effort, per task).** **One wave = one message containing that wave's
 `Agent` calls, every one with `run_in_background: false`.** That is the wave barrier:
 multiple calls in one message give concurrency within the wave, and
 `run_in_background: false` is what stops wave N+1 from dispatching before wave N's files
-exist. Cap at 5 concurrent. Each task goes to the executor the plan marks, `fast-worker`
-or `hard-worker`, always with `model: "opus"` and `effort: "low"`.
+exist. Cap at 5 concurrent. Each task goes to the executor the plan marks: `fast-worker`
+with `model: "sonnet"` and `effort: "medium"`, or `hard-worker` with `model: "opus"` and `effort: "high"`.
 
 ```
-Agent({ subagent_type: "claude-skills:<executor>", model: "opus", effort: "low", run_in_background: false, prompt: `
+Agent({ subagent_type: "claude-skills:<executor>", model: "<sonnet|opus>", effort: "<medium|high>", run_in_background: false, prompt: `
 Task: <task id and objective>
 Plan: read <absolute followup-plan path>, task <T-n> applies to you
 Files: <exact paths to touch>

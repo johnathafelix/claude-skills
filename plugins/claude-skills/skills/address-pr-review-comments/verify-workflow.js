@@ -4,10 +4,11 @@ export const meta = {
   phases: [{ title: 'Verify' }, { title: 'Challenge' }],
 }
 
-// Both stages run fable at high effort: whether a human reviewer is right is the call
-// this skill is built around, so it does not get a cheap model.
+// Both stages run at high effort: whether a human reviewer is right is the call this
+// skill is built around. The verifier runs fable; the challenger runs opus so a second
+// model catches blind spots a same-model re-read would share, at lower per-thread cost.
 const VERIFY_MODEL = 'fable'
-const CHALLENGE_MODEL = 'fable'
+const CHALLENGE_MODEL = 'opus'
 const VERIFY_EFFORT = 'high'
 const CHALLENGE_EFFORT = 'high'
 

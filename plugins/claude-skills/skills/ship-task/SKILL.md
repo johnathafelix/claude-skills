@@ -114,8 +114,9 @@ files remain in review scope; language checkers inspect surviving code and calle
 Exclude generated/vendor files from language checks and list relevant exclusions.
 
 Run applicable `golang-check` / `ts-check` and `test-check`, passing
-`changeManifestPath`, explicit repo-relative file lists, repoDir, profile, baseline and
-`nitPolicy: "material"`. Stage checker scripts
+`changeManifestPath`, explicit repo-relative file lists, repoDir, profile, baseline,
+`nitPolicy: "material"` and `effort` matching the profile (`"medium"` for fast/standard,
+`"high"` for thorough). Stage checker scripts
 with `scripts/review-dispatch.js` (see code-review Step 3); it builds exact payloads and
 inlines the shared runtime and guideline anchors.
 Use the exact session scratchpad declared by the harness, not an arbitrary temp directory.
