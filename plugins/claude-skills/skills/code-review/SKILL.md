@@ -105,8 +105,9 @@ object to Workflow; do not attempt the temp scriptPath first or rewrite/trim the
 Workflow(<exact object from dispatchPath>)
 ```
 
-Pass `args` as a real JSON object, not a JSON-encoded string. Wait for the completion
-notification, then read `{ findings, findingCount, dimensionsUnverified, unchallenged, rejectedFindings, refuted, dimensionsSkipped, stats }`.
+Pass `args` as a real JSON object, not a JSON-encoded string. While the Workflow runs,
+end your turn or do other work; never call `Workflow` with a placeholder `scriptPath`
+(e.g. `/dev/null`) to wait. The completion notification re-invokes you; then read `{ findings, findingCount, dimensionsUnverified, unchallenged, rejectedFindings, refuted, dimensionsSkipped, stats }`.
 
 The default `nitPolicy: "material"` limits each finder to two nits with concrete
 maintenance/testing cost. It does not limit correctness issues or discard existing

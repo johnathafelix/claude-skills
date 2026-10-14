@@ -9,6 +9,8 @@ argument-hint: "<PR URL> [fast|standard|thorough] [low|medium|high|xhigh|max] [a
 Invocation authorizes posting one GitHub review without confirmation. Never edit code,
 push, merge or resolve threads. Dependencies and coverage may be generated in an isolated
 worktree. Await Workflow completion notifications; dispatch task IDs are not results.
+While a Workflow runs, end your turn or do other work; never call `Workflow` with a
+placeholder `scriptPath` (e.g. `/dev/null`) to wait. The notification re-invokes you.
 Resolve helper/sibling paths from this SKILL.md, including in the plugin cache. Keep
 large artifacts in scratchpad and report concise summaries.
 
