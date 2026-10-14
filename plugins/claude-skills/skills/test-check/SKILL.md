@@ -1,6 +1,6 @@
 ---
 name: test-check
-description: "Report test quality for changed behavior: measured changed-line coverage, assertion fidelity/strictness, real-engine DB integration and mock expectations. Uses two read-only sonnet groups and bounded independent challenge batches. Use for /test-check or before shipping changed code/tests."
+description: "Report test quality for changed behavior: measured changed-line coverage, assertion fidelity/strictness, real-engine DB integration and mock expectations. Uses two read-only opus groups and bounded independent challenge batches. Use for /test-check or before shipping changed code/tests."
 model: sonnet
 ---
 
@@ -60,7 +60,7 @@ Standalone checks retain all style rules; pipelines pass nitPolicy: "material" t
 each pass to two nits with concrete cost, preserving correctness findings.
 The script accepts an object or JSON args string. Default `mode: "grouped"`; request
 `"individual"` for thorough isolated checks. Grouping preserves every applicable rule.
-Restricted sonnet checkers share source reads within a group, at most four in flight.
+Restricted opus checkers (high effort) share source reads within a group, at most four in flight.
 Each rule requires line-count/first/last-line anchors; these detect missing or wrong
 reads, not comprehension. Retry a failed rule once, retaining successful siblings.
 Terminal API failures already retried by the harness do not trigger another loop.

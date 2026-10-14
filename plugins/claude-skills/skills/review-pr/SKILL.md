@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Opus review (low effort by default) and language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
+description: "Review a teammate's GitHub PR and post confirmed findings. Uses grouped Opus review (medium effort by default, high for thorough) and language/test checks, one independent verification queue, bounded coverage and incremental re-reviews. Approves when only nits remain; approve permits approval with issues. Posts directly when invoked."
 argument-hint: "<PR URL> [fast|standard|thorough] [low|medium|high|xhigh|max] [approve] [full]"
 ---
 
@@ -19,7 +19,8 @@ large artifacts in scratchpad and report concise summaries.
 Accept one `https://github.com/<owner>/<repo>/pull/<number>` URL, an optional profile,
 effort, `approve` and `full`, in any order. Reject unknown/conflicting arguments with
 usage. `approve` sets FORCE_APPROVE; `full` disables incremental reuse. Profile defaults
-to REVIEW_PR_PROFILE or `standard`; effort to REVIEW_PR_EFFORT, else `low`.
+to REVIEW_PR_PROFILE or `standard`; effort to REVIEW_PR_EFFORT, else `medium` (`high`
+for thorough).
 Every review and check agent runs on opus (`model: "opus"` in the args below). Validate environment values against the choices above. Honor explicit
 profiles; otherwise escalate to thorough for authorization, concurrency, data migrations,
 broad public-contract changes or similarly material risk, explaining the choice.

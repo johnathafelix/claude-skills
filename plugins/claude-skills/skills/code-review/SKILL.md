@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review local changes or a GitHub PR with grouped opus finders (low effort by default) and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
+description: "Review local changes or a GitHub PR with grouped opus finders (medium effort by default, high for thorough) and bounded independent challenges. Thorough covers all 15 angles in five passes plus a bounded fresh sweep. Reports findings and explicit gaps; never edits or posts."
 argument-hint: "[fast|standard|thorough] [low|medium|high|xhigh|max] [PR URL]"
 ---
 
@@ -23,7 +23,7 @@ notification, then report.
 Split the arguments on whitespace. Tokens may come in any order:
 
 - `fast`, `standard`, `thorough` → `PROFILE`. Default `standard`.
-- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `low` for every profile.
+- `low`, `medium`, `high`, `xhigh` or `max` → `EFFORT`. Default `medium` for fast/standard, `high` for thorough.
 - A URL matching `https://github.com/<owner>/<repo>/pull/<number>` → PR mode, with
   `OWNER`, `REPO`, `PR_NUMBER`.
 - Anything else → stop and show usage:

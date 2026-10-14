@@ -8,11 +8,11 @@ async function runGroupedChecks(config) {
   const mode = input.mode || 'grouped'
   if (!['grouped', 'individual'].includes(mode)) throw new Error('mode must be grouped or individual')
   const nitInstructions = reviewNitPolicy(input.nitPolicy, 'all')
-  // Callers that omit model/effort keep the pinned sonnet checkers and their agent options.
-  const model = input.model === undefined ? 'sonnet' : input.model
+  // Callers that omit model/effort get opus checkers at high effort.
+  const model = input.model === undefined ? 'opus' : input.model
   if (!['sonnet', 'opus'].includes(model)) throw new Error('model must be sonnet or opus')
   if (input.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(input.effort)) throw new Error('effort must be low, medium, high, xhigh or max')
-  const effortOption = input.effort === undefined ? {} : { effort: input.effort }
+  const effortOption = { effort: input.effort === undefined ? 'high' : input.effort }
   const repoDir = input.repoDir || ''
   const norm = value => String(value ?? '').replace(/[–—―]/g, '-').replace(/→/g, '->').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()
   if (config.test && (![input.sourceFiles || [], input.testFiles || []].every(Array.isArray))) throw new Error('sourceFiles and testFiles must be arrays')

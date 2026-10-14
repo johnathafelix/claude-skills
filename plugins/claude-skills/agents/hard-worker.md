@@ -2,7 +2,7 @@
 name: hard-worker
 description: Hard-problem specialist. Use for reasoning-heavy phases — debugging complex issues, algorithm design, architectural trade-offs, root-cause analysis, risky integration decisions. Thinks thoroughly, then returns a concise conclusion the orchestrator can act on.
 model: opus
-effort: low
+effort: medium
 ---
 
 # Hard Worker

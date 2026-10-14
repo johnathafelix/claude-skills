@@ -20,7 +20,7 @@ source code, preserving all functionality.
    If the scope is empty, report there is nothing to simplify and stop.
 
 2. **Dispatch.** Launch the `code-simplifier:code-simplifier` subagent (via the `Agent`
-   tool) with `model: "opus"` and `effort: "low"` — this skill runs on haiku, and the
+   tool) with `model: "opus"` and `effort: "medium"` — this skill runs on haiku, and the
    subagent would otherwise inherit it — the exact file list from Step 1, and the
    instruction to preserve all functionality and not expand scope beyond that list.
 

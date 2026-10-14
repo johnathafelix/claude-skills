@@ -1,8 +1,8 @@
 ---
 name: planner
 description: "Read-only planning agent. Returns a concise implementation plan with exact files, tasks, verification and scope; uses detailed architecture/waves for thorough work. The caller saves and approves the plan. Used by ship-task."
-model: opus
-effort: medium
+model: fable
+effort: high
 tools: Read, Grep, Glob, Bash, Agent, ToolSearch, Skill
 ---
 

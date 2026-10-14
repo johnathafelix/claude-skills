@@ -3,7 +3,7 @@ name: check-rest-api-design
 description: USE WHEN designing, reviewing, or changing a REST/HTTP API and you want it checked against REST design best practices — resource/URI modeling, HTTP method semantics, query params (filtering/sorting/pagination), status codes, request/response body shape, idempotency, async jobs, non-CRUD actions, caching/conditional requests, versioning, and cross-cutting concerns. Fans out parallel sub-agents (one per section-bucket) so the check runs fast and the findings — not the file dumps — come back to the main context. Checks route definitions, controllers/handlers, OpenAPI specs, diffs, or a described design against the bundled guide and reports violations with location, the rule broken, and the fix. Invoke via /check-rest-api-design.
 allowed-tools: Task, Read, Grep, Glob, Bash
 model: opus
-effort: low
+effort: medium
 argument-hint: [files, dir, OpenAPI spec, PR/diff, or a described endpoint]
 ---
 
@@ -35,7 +35,7 @@ Find the API surface: route/router definitions, controllers/handlers, OpenAPI/Sw
 
 ### Step 3 — Fan out sub-agents (parallel)
 
-Spawn the buckets below **in a single message so they run concurrently** (`Task`, `Explore` or `general-purpose` agent type), each with `model: "opus"` and `effort: "low"`. Each sub-agent does the reading; the main thread stays clean and only receives findings.
+Spawn the buckets below **in a single message so they run concurrently** (`Task`, `Explore` or `general-purpose` agent type), each with `model: "opus"` and `effort: "medium"`. Each sub-agent does the reading; the main thread stays clean and only receives findings.
 
 Give every sub-agent:
 - the exact file scope from Step 1 (paths, or the diff range),

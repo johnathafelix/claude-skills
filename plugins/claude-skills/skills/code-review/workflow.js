@@ -8,7 +8,7 @@ export const meta = {
 // Why not the built-in /code-review: a pipeline cannot invoke a slash command, and the
 // Agent tool has `model` but no `effort`. Only agent() calls in a Workflow can pin both,
 // so every call below does. Angles and sweep are adapted from the built-in's max recipe.
-// `model` stays sonnet unless a caller opts in: /ship-task shares this script.
+// `model` defaults to opus; callers may opt into sonnet.
 const MODEL_CHOICES = ['sonnet', 'opus']
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // REVIEW_INPUT_RUNTIME
@@ -61,7 +61,7 @@ if (!EFFORT_LEVELS.includes(EFFORT)) {
   throw new Error(`code-review workflow received effort ${JSON.stringify(EFFORT)} — expected one of ${EFFORT_LEVELS.join(', ')}`)
 }
 
-const MODEL = parsedArgs.model === undefined ? 'sonnet' : parsedArgs.model
+const MODEL = parsedArgs.model === undefined ? 'opus' : parsedArgs.model
 
 if (!MODEL_CHOICES.includes(MODEL)) {
   throw new Error(`code-review workflow received model ${JSON.stringify(MODEL)} — expected one of ${MODEL_CHOICES.join(', ')}`)

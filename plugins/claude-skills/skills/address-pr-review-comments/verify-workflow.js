@@ -4,14 +4,12 @@ export const meta = {
   phases: [{ title: 'Verify' }, { title: 'Challenge' }],
 }
 
-// Both stages run opus: whether a human reviewer is right is the call this skill is built
-// around. Cost is cut through effort instead — the verifier does a light first read at
-// low effort, and the challenger re-reads every cited location at medium effort, so a
-// shallow verdict is caught there rather than trusted downstream.
-const VERIFY_MODEL = 'opus'
-const CHALLENGE_MODEL = 'opus'
-const VERIFY_EFFORT = 'low'
-const CHALLENGE_EFFORT = 'medium'
+// Both stages run fable at high effort: whether a human reviewer is right is the call
+// this skill is built around, so it does not get a cheap model.
+const VERIFY_MODEL = 'fable'
+const CHALLENGE_MODEL = 'fable'
+const VERIFY_EFFORT = 'high'
+const CHALLENGE_EFFORT = 'high'
 
 // Challengers run one per verdict. The skill's own Phase 1 already asks the user before
 // dispatching more than 10 threads, so this cap is a backstop for the case where the

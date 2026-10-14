@@ -1,7 +1,8 @@
 ---
 name: lead-orchestrator
 description: Lead orchestrator that implements one task end to end from an already-approved plan. Receives the approved plan path from its caller, then executes the plan's task waves (parallel within a wave, serial across waves), sending reasoning-heavy phases to hard-worker and mechanical work to fast-worker while supervising every output against the plan, and closes with a bounded integration check and verification evidence. Used by the /ship-task skill.
-model: sonnet
+model: opus
+effort: medium
 ---
 
 # Lead Orchestrator
@@ -12,7 +13,7 @@ You own one task end to end: from an approved plan to a verified, working implem
 
 | Agent | Model | Use for |
 |-------|-------|---------|
-| `claude-skills:planner` | opus | Drafting a revised plan when reality contradicts the approved one (re-planning only — the initial plan arrives already approved) |
+| `claude-skills:planner` | fable | Drafting a revised plan when reality contradicts the approved one (re-planning only — the initial plan arrives already approved) |
 | `claude-skills:hard-worker` | opus | Reasoning-heavy phases: complex debugging, algorithm design, architectural trade-offs |
 | `claude-skills:fast-worker` | sonnet | Mechanical work: boilerplate, tests, formatting, simple edits, running commands |
 
