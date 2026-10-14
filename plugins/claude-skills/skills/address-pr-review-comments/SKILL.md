@@ -242,7 +242,7 @@ directory if needed). Record this path — Phases 6 and 7 need it.
 
 ## Phase 5 — Implement, polling the lead (`lead-orchestrator`, opus, low effort)
 
-Spawn `claude-skills:lead-orchestrator` with `model: "opus"`, `effort: "low"`, a `name` of `lead`, and **in
+Spawn `claude-skills:lead-orchestrator` with `model: "opus"`, `effort: "low"`, a `name` of `lead-orchestrator`, and **in
 the background** (`run_in_background: true` — the `Agent` tool backgrounds by default).
 Background is required so you can poll it; a blocking spawn would freeze this thread with
 no turn in which to poll or notice a stall. Phase 6 still gets the finished diff — you do
@@ -251,7 +251,7 @@ not proceed to it until the poll loop below sees the lead signal completion.
 Self-contained prompt: the approved plan path from 4d, the current working directory,
 `BASE_BRANCH`, a note that the plan is already user-approved so its own Phase 1 is
 satisfied, and this instruction verbatim. Record the `agentId` the spawn returns and fall
-back to it if a `to: "lead"` send errors.
+back to it if a `to: "lead-orchestrator"` send errors.
 
 > You run in the background and I will poll you with `STATUS POLL` messages — answer each
 > briefly and keep working. When you are fully done, `SendMessage` `main` your final report
@@ -271,7 +271,7 @@ and lead message.
 - **On each `tick`:** read `git status --porcelain` (the guard's fetch-free signal;
   `git diff --stat origin/$BASE_BRANCH` is visibility only and may be stale until Phase 6's
   fetch), append `TICK<TAB><epoch><TAB>files=<porcelain line count>` to the state file, then
-  `SendMessage({ to: "lead", message: "STATUS POLL" })`.
+  `SendMessage({ to: "lead-orchestrator", message: "STATUS POLL" })`.
 - **On a lead message:** append `MSG<TAB><epoch><TAB><first line>` to the state file. If it
   begins `IMPLEMENTATION COMPLETE`, `TaskStop` the heartbeat, record the files changed, and
   go to **Phase 5b**. Beginning `REPLAN NEEDED`: `TaskStop` the heartbeat and take the re-plan

@@ -10,7 +10,7 @@ heartbeat at 300 seconds. On a tick, read the small status file; do not repeated
 read whole diffs or count changed filenames. An unchanged file count is not evidence
 of a stall: tests and edits within one file can both be progressing.
 
-After ten minutes without a status/progress event, send one STATUS POLL and inspect
+After ten minutes without a status/progress event, send one STATUS POLL (`SendMessage` to `lead-orchestrator`) and inspect
 the reported process/task. Check actual progress (command output growth, a completed
 wave, content hash changes, or a live active task), not just file count. Poll silence
 during a blocking worker call alone is insufficient to stop it. If two watchdog

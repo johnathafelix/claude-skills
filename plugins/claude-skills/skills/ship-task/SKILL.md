@@ -81,7 +81,7 @@ inputs and pre-existing dirt.
 
 Fast: implement directly or dispatch one `claude-skills:fast-worker` (sonnet).
 Standard: coordinate tasks directly; use workers only for distinct useful work packages.
-Thorough: dispatch `claude-skills:lead-orchestrator` with `model: "sonnet"`, approved plan,
+Thorough: dispatch `claude-skills:lead-orchestrator` with `model: "sonnet"`, `name: "lead-orchestrator"`, approved plan,
 profile, manifest/helper locations and the watchdog instructions in `references/watchdog.md`.
 Use `run_in_background: true`; tell it explicitly to send `main` its completion report.
 Use opus hard-worker only for a difficult decision; a second opinion needs a concrete
