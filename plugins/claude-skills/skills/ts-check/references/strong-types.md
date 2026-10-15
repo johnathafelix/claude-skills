@@ -437,7 +437,7 @@ const routes = {
 Indexed access belongs where the element type has no public name. If the name exists, use it.
 
 **Refactoring steps:**
-1. Grep for `<TypeName>\[['"]` in changed files (e.g. `Payload\['`, `Props\['`).
+1. Search for `<TypeName>\[['"]` in changed files (e.g. `Payload\['`, `Props\['`).
 2. For each hit, check whether the field's type is already an exported named type (look at the container's definition).
 3. If a name exists: replace the indexed lookup with the named type, add the import, and verify the build.
 4. If no name exists but the type is used in multiple places: *extract* a named type and export it, then import it where needed.

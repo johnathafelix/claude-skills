@@ -96,7 +96,7 @@ const DIMENSIONS = [
     key: 'cross-file',
     label: 'cross-file callers and callees',
     kind: 'bug',
-    prompt: 'For each function the diff changes, find its callers (Grep for the symbol) and check whether the change breaks any call site: a new precondition, a changed return shape, a new exception, a timing or ordering dependency. Also check callees: does a parallel change in the same diff make a call unsafe?',
+    prompt: 'For each function the diff changes, find its callers (search for the symbol) and check whether the change breaks any call site: a new precondition, a changed return shape, a new exception, a timing or ordering dependency. Also check callees: does a parallel change in the same diff make a call unsafe?',
   },
   {
     key: 'language-pitfalls',
@@ -139,7 +139,7 @@ const DIMENSIONS = [
     key: 'reuse',
     label: 'reuse',
     kind: 'cost',
-    prompt: 'Flag new code that duplicates a helper the codebase already has — Grep shared/utility modules and files adjacent to the change, and name the existing helper to call instead.',
+    prompt: 'Flag new code that duplicates a helper the codebase already has — search shared/utility modules and files adjacent to the change, and name the existing helper to call instead.',
   },
   {
     key: 'simplification',

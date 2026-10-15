@@ -27,7 +27,7 @@ Pick what to check, in this order:
    - `git diff <base>...HEAD` for changed route/handler/schema files.
 3. Otherwise ask the user what to check (paste endpoints, point at route files, or name a spec).
 
-Find the API surface: route/router definitions, controllers/handlers, OpenAPI/Swagger YAML/JSON, GraphQL is out of scope (this guide is REST). Prefer graph tools / `Grep` for route decorators (`@Get`, `router.post`, `app.route`, path strings) to locate endpoints fast.
+Find the API surface: route/router definitions, controllers/handlers, OpenAPI/Swagger YAML/JSON, GraphQL is out of scope (this guide is REST). Prefer graph tools or a text search for route decorators (`@Get`, `router.post`, `app.route`, path strings) to locate endpoints fast.
 
 ### Step 2 — Decide: fan out or inline
 
