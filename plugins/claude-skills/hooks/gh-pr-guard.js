@@ -12,13 +12,16 @@
  * against the payload cwd. PR titles are prose, so there is NO conventional-type
  * or lowercase check here.
  *
- * Falls back to allow (never breaks the flow) when a body reference can't be
- * resolved: editor commits, `-F -` (stdin, already consumed for the payload),
- * a file not yet written when the guard runs (e.g. `printf ... > f.md &&
- * gh pr create -F f.md` in one command), or any read error. Also not resolved
- * (contrived vs. the real vector, left open on purpose): a `$(cat FILE)` in
- * --title (no --title-file exists), variable indirection (`B=$(cat f); --body
- * "$B"`), and non-cat readers (`$(head f)` etc.).
+ * Denies when a body reference can't be checked, since an unchecked body is
+ * how attribution leaked before: a path holding a shell expansion
+ * (`-F "$B"`), `-F -` (stdin, already consumed for the payload), or a file
+ * that can't be read, including one written later in the same command
+ * (`printf ... > f.md && gh pr create -F f.md`): hooks run before the
+ * command. The fix is to write the file in an earlier command and pass its
+ * literal path. Still not resolved (contrived vs. the real vector, left open
+ * on purpose): a `$(cat FILE)` in --title (no --title-file exists), variable
+ * indirection in --body (`B=$(cat f); --body "$B"`), and non-cat readers
+ * (`$(head f)` etc.).
  */
 
 const fs = require("fs");
@@ -43,11 +46,7 @@ function allow() {
   process.exit(0); // no output = no decision = normal flow
 }
 
-function deny(reasons) {
-  const reason =
-    "pr title/body contains AI attribution (skills forbid this):\n- " +
-    reasons.join("\n- ") +
-    "\n\nremove the attribution and run the command again.";
+function deny(reason) {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -97,16 +96,16 @@ function substFilePath(value) {
   return m ? m[1] : "";
 }
 
-/** Read a body-reference file (resolved against cwd), or "" if unreadable/stdin. */
+/** Read a body-reference file (resolved against cwd), or null when it can't be checked. */
 function readBodyFile(cwd, p) {
   const clean = p.replace(/^['"]|['"]$/g, "");
-  if (clean === "" || clean === "-") return "";
+  if (clean === "" || clean === "-" || clean.includes("$")) return null;
 
   const resolved = path.isAbsolute(clean) ? clean : path.resolve(cwd || ".", clean);
   try {
     return fs.readFileSync(resolved, "utf8");
   } catch {
-    return "";
+    return null;
   }
 }
 
@@ -125,18 +124,33 @@ function main() {
   const body = flagValue(cmd, "body", "b");
   const sources = [flagValue(cmd, "title", "t"), body];
 
-  const bodyFile = fileFlagPath(cmd, "body-file", "F");
-  if (bodyFile) sources.push(readBodyFile(cwd, bodyFile));
+  const bodyRefs = [fileFlagPath(cmd, "body-file", "F"), substFilePath(body)].filter(Boolean);
 
-  const bodySubst = substFilePath(body);
-  if (bodySubst) sources.push(readBodyFile(cwd, bodySubst));
+  for (const ref of bodyRefs) {
+    const content = readBodyFile(cwd, ref);
+    if (content === null) {
+      return deny(
+        `pr body file \`${ref}\` can't be checked for AI attribution (stdin, a shell ` +
+          "expansion, or a file that doesn't exist yet: hooks run before the command).\n\n" +
+          "write the body file in an earlier command, then pass its literal path."
+      );
+    }
+
+    sources.push(content);
+  }
 
   const text = sources.join("\n");
   if (text.trim() === "") return allow();
 
   const reasons = FORBIDDEN.filter(({ re }) => re.test(text)).map(({ msg }) => msg);
 
-  if (reasons.length > 0) return deny(reasons);
+  if (reasons.length > 0) {
+    return deny(
+      "pr title/body contains AI attribution (skills forbid this):\n- " +
+        reasons.join("\n- ") +
+        "\n\nremove the attribution and run the command again."
+    );
+  }
 
   return allow();
 }
