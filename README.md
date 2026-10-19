@@ -6,7 +6,7 @@ This repo is a **plugin marketplace** containing a single plugin, `claude-skills
 
 - **19 skills** — dev-workflow helpers for git, PRs, TDD, TypeScript/Go quality, code and PR review, REST API review, writing cleanup, formatting, code simplification, and end-to-end task implementation.
 - **7 agents** — `go-idiom-checker` / `ts-quality-checker` / `test-checker` (the restricted sub-agents `golang-check` / `ts-check` / `test-check` fan out to) plus the implementation team used by `ship-task`: `lead-orchestrator`, `planner`, `hard-worker`, `fast-worker`.
-- **2 hooks** — guardrails for safe commits/PRs.
+- **3 hooks** — guardrails for safe commits/PRs, plus a post-edit encoding and build check.
 
 ## Setup
 
@@ -81,6 +81,7 @@ Ships in this repo but can't be auto-installed by a plugin; wire it up by hand (
 |---|---|---|
 | `git-commit-guard.js` | PreToolUse (Bash) | Guards risky `git commit` invocations |
 | `gh-pr-guard.js` | PreToolUse (Bash) | Guards risky `gh pr` invocations |
+| `post-edit-check.js` | PostToolUse (Edit, Write) | Scans the written text for literal invisible/control characters (BOM, zero-width, bidi, NBSP, braille blank, Hangul fillers) and reports each with its line and `\uXXXX` escape; notes other non-ASCII in source files. Then builds the edited file: Go via `go test -run '^$'` in its package (compiles `_test.go` too) after formatting it with `gofmt -w`, Python via a syntax parse. TypeScript/JS are not built (`tsc` is project-wide and slow). Findings are fed back to Claude; nothing is undone |
 
 `golang-check`, `ts-check`, and `simplify-code` used to be hook-enforced on every turn that touched relevant source; they're now plain skills Claude invokes at its own judgment (see their descriptions), so nothing here blocks the turn from ending. All three still run directly on request, via `/golang-check`, `/ts-check`, and `/simplify-code`.
 
