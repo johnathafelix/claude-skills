@@ -13,6 +13,10 @@ respect any narrower user instruction (for example, prepare only, no push).
 The main thread owns approval and completion. Never finish merely because an Agent or
 Workflow dispatch returned a task ID. Wait for its result and inspect coverage gaps.
 
+## PRs & Commits
+
+NEVER include AI attribution anywhere: no '🤖 Generated with Claude Code', no 'Co-Authored-By: Claude' trailers, in commit messages or PR bodies. This applies to every `gh pr create`/`gh pr edit` body, including bodies written to temp files or shell variables. Repo hooks will reject them.
+
 ## 1. Preflight and choose a profile
 
 Read applicable project instructions. Record branch, HEAD and `git status --porcelain`.

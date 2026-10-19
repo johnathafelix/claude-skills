@@ -36,6 +36,10 @@ plan, pending approval" with nothing gating it.
 not run its Explore/Plan phases and do not call `ExitPlanMode` with a plan of your own —
 plans come from `claude-skills:planner`, except on the rebuttal-only path in Phase 9.
 
+## PRs & Commits
+
+NEVER include AI attribution anywhere: no '🤖 Generated with Claude Code', no 'Co-Authored-By: Claude' trailers, in commit messages or PR bodies. This applies to every `gh pr create`/`gh pr edit` body, including bodies written to temp files or shell variables. Repo hooks will reject them.
+
 ## The input
 
 The input is: **$ARGUMENTS**
