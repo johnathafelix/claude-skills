@@ -24,6 +24,14 @@ explicitly says so. Review is mandatory in every profile, docs-only changes incl
 After each step, give a one-line status: what's done, what's next. Name a skipped step
 and the user instruction that allowed it; never end on an ambiguous state.
 
+After plan approval the run is autonomous: no further questions. A stage that cannot
+pass stops the run with a report. Six gated stages, (a) preflight-lint, (b)
+byte-safety, (c) test-first, (d) review, (e) attribution and (f) stacked-branch, each
+write a pass/fail entry to the journal. The final gate refuses to open a PR unless every
+stage passed. Follow [references/ship-gates.md](references/ship-gates.md) for each stage's
+exact commands, the journal helper and the shell portability rules (perl one-liners,
+never `sed -i` or `grep -P`).
+
 ## 1. Preflight and choose a profile
 
 Read applicable project instructions. Record branch, HEAD and `git status --porcelain`.
@@ -64,11 +72,12 @@ unwanted dependency rather than wrap it), and response headers on every path, ea
 
 Include this authorization in the initial plan:
 
-> After implementation, fix independently confirmed issues that prevent this task
-> from meeting its approved behavior, within the same scope. Allow one remediation
-> batch and one final correction. Nits are optional unless explicitly requested.
-> A new dependency, behavior change beyond the request, destructive action or scope
-> expansion requires a revised decision from the user.
+> After implementation, fix every independently confirmed review issue within the same
+> scope, and re-run review until no confirmed issues remain, at most three rounds.
+> Nits never block the PR or trigger another round.
+> Fix lint, byte-safety and test-first failures the same way. A new dependency,
+> behavior change beyond the request, destructive action or scope expansion stops the
+> run for a revised decision from the user.
 
 When the user already approved a concrete plan covering this work, reuse it and its
 actual authorization. Do not assume an older approval includes new scope or publishing.
@@ -123,6 +132,12 @@ Do not repeat them after shipping. Refresh after edits:
 ```bash
 node "<plugin>/scripts/task-manifest.js" refresh "<scratchpad>/ship-task"
 ```
+
+Then run stages (a) preflight-lint, (b) byte-safety and (c) test-first from
+[ship-gates.md](references/ship-gates.md) and journal each one. For a bug fix, write the
+test before the fix when practical. Stage (c) still proves red on the old code, green on
+the new code and red again with the fix reverted, using a scratch worktree, never the
+live tree. Fix failures and refresh before review starts.
 
 ## 4. Scoped checks and independent review
 
@@ -192,27 +207,28 @@ issues at one location, batches up to four claims per independent verifier, and 
 verification at eight calls with at most four agents in flight. Thorough's fresh sweep
 has a 12-read/search-call budget; incomplete work remains a gap.
 Missing/malformed verdicts and budget overflow remain explicitly unchallenged. Do not
-fix them as confirmed, count them as clean, or start unbounded retries. Report the gap
-and request a targeted decision only if shipping cannot proceed without resolving it.
+fix them as confirmed, count them as clean, or start unbounded retries. Re-challenge
+them in the next review round; any still unchallenged after round three fail stage (d).
 
 Keep full results in the scratchpad; carry counts and actionable issues in context.
 Language/test UNVERIFIED rules, review dimensionsUnverified, dimensionsSkipped,
 refuted and unchallenged entries must remain visible in the eventual report.
 
-## 5. Bounded remediation and final verification
+## 5. Review until clean and final verification
 
-For independently confirmed **issues**, apply the plan's authorized remediation in
-one batch. Main thread or fast-worker can use a short action list; do not commission
-another comprehensive plan or ask again for routine fixes already approved. A truly
-new scope/behavior decision goes to the user with the concrete proposed change.
-Nits do not block shipping unless the user requested them.
+Stage (d): fix every independently confirmed issue in one batch per round. Nits are
+optional: fix cheap ones in the same batch, but they never block or start a round. Main thread or fast-worker can use a short action list; do not
+commission another comprehensive plan or ask again for routine fixes already approved.
+A fix that needs new scope or behavior records review fail and stops the run with the
+concrete proposed change.
 
-Refresh the manifest after remediation. Recheck only changed rules/areas and affected
-commands; preserve still-valid results for unchanged inputs. Independently verify the
-actual fixes together in one focused pass where inspection adds value. Do not spawn
-one verifier per checklist item. Allow one final correction, then rerun the commands
-it invalidates, and inspect the corrected hunks before marking them reviewed.
-Persistent issues or required verification failures stop shipping.
+After each round: refresh the manifest, then rerun (a), (b) and the affected tests.
+Then rerun the core review on the refreshed manifest, reusing still-valid checker
+results for unchanged inputs. Clean means zero confirmed issues and zero
+unchallenged entries; a round with only nits is clean, and the remaining nits go in the
+report. Stop at three rounds: if the review is still not clean, record
+review fail and stop. Record review pass only for a clean round on the current manifest
+revision. Required verification failures also stop shipping.
 
 Record evidence outside the repo: each command, exit status, output path, relevant
 files/configuration/dependency inputs, repositorySnapshot and review manifest revision.
@@ -227,26 +243,35 @@ Confirm the final manifest revision matches the reviewed patch and verification
 inputs. With zero task changes, report that fact and stop without creating a commit.
 Resolve any remaining required gaps before shipping; user-approved exceptions must be
 explicit in the report and PR. Prepare the PR body once: behavior, key change, validation
-and material limits. Save it as `<scratchpad>/ship-task/pr-body.md`.
+and material limits. Save it as `<scratchpad>/ship-task/pr-body.md`. Write the
+conventional commit message (subject lowercase, at most 72 chars) to
+`<scratchpad>/ship-task/commit-msg.txt`. Run stage (e) attribution on both files, and
+fix any hit before going further.
 
-Invoke `/git-commit` with the manifest-owned paths and this restriction: stage task
-changes only; preserve pre-existing staged/unstaged work. Never use blanket `git add`.
+Invoke `/git-commit` with the manifest-owned paths, the scanned message to use verbatim
+(heredoc `-m`, never `-F`), and this restriction: stage task changes only; preserve
+pre-existing staged/unstaged work. Never use blanket `git add`.
 A baselineDirty path contains mixed ownership: use a reviewed task-only hunk staging
-method that preserves the existing index, or obtain a concrete decision on the overlap.
+method that preserves the existing index, or stop the run and report the overlap.
 Do not automatically include the whole dirty file. Confirm the staged diff contains
 only task hunks before committing. Do not modify source after final verification.
 
-Before opening a stacked PR (base is not main/master), confirm the base branch still
-exists on the remote (`git ls-remote --exit-code --heads origin <base>`) and is not
-merged (`gh pr list --head <base> --state merged`). If it is gone or merged, rebase
-onto main (`git rebase --onto origin/main <base-sha> HEAD`), rerun the verification
-commands the rebase invalidates, and use main as the base.
+Stage (f): before opening a stacked PR (base is not main/master), confirm the base
+branch still exists on the remote (`git ls-remote --exit-code --heads origin <base>`)
+and is not merged (`gh pr list --head <base> --state merged --json number --jq 'length'`
+is 0). If it is gone or merged, rebase onto main automatically with `git rebase
+--onto origin/main <base-sha>` on the checked-out task branch. Passing `HEAD` as a
+third argument detaches it and leaves the branch unmoved. Rerun the verification
+commands the rebase invalidates and use main as the base. Record the outcome either
+way; a base of main records pass.
 
-Invoke `/draft-pr` with the base and the prepared body file. It pushes and creates or
+Run the gate (`ship-journal.js gate`, see ship-gates.md). On a non-zero exit, do not
+push or open a PR: report the failing stages and the journal path. On pass, invoke
+`/draft-pr` with the base and the prepared body file. It pushes and creates or
 updates the draft once; skip `/update-pr-description` when the body was already supplied.
 Respect the session's existing publishing authorization and any prepare-only constraint.
 
-Final report: outcome, PR URL (or prepared state), verification result, material gaps,
+Final report: outcome, PR URL (or prepared state), journal stage results, verification result, material gaps,
 profile and actual agent calls from workflow stats. Read elapsed duration from completed
 Workflow metadata with scripts/workflow-metrics.js (see code-review Step 4). Phase
 agent spans exclude coordinator overhead; missing times are null. Sandbox scripts

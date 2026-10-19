@@ -155,4 +155,6 @@ function main() {
   return allow();
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { FORBIDDEN };
