@@ -17,6 +17,13 @@ Workflow dispatch returned a task ID. Wait for its result and inspect coverage g
 
 NEVER include AI attribution anywhere: no '🤖 Generated with Claude Code', no 'Co-Authored-By: Claude' trailers, in commit messages or PR bodies. This applies to every `gh pr create`/`gh pr edit` body, including bodies written to temp files or shell variables. Repo hooks will reject them.
 
+## Ship pipeline
+
+Never skip a step (compaction → checks → review → commit → draft PR) unless the user
+explicitly says so. Review is mandatory in every profile, docs-only changes included.
+After each step, give a one-line status: what's done, what's next. Name a skipped step
+and the user instruction that allowed it; never end on an ambiguous state.
+
 ## 1. Preflight and choose a profile
 
 Read applicable project instructions. Record branch, HEAD and `git status --porcelain`.
@@ -48,6 +55,12 @@ For fast, draft a short plan yourself. For standard/thorough, call
 request, repo, profile, baseline dirt and intended scope. Ask for a concise plan with
 exact files, implementation tasks, verification commands and material risks. Thorough
 can use detailed waves. Do not demand architecture boilerplate for a local edit.
+
+Every plan, fast included, lists the invariants the change must preserve and how each
+will be tested before implementation starts: audit logging (context and rows),
+transaction boundaries, test dependencies (no new fake binaries or tools; remove an
+unwanted dependency rather than wrap it), and response headers on every path, early
+400s included. Mark an invariant that does not apply as N/A rather than dropping it.
 
 Include this authorization in the initial plan:
 
@@ -222,6 +235,12 @@ A baselineDirty path contains mixed ownership: use a reviewed task-only hunk sta
 method that preserves the existing index, or obtain a concrete decision on the overlap.
 Do not automatically include the whole dirty file. Confirm the staged diff contains
 only task hunks before committing. Do not modify source after final verification.
+
+Before opening a stacked PR (base is not main/master), confirm the base branch still
+exists on the remote (`git ls-remote --exit-code --heads origin <base>`) and is not
+merged (`gh pr list --head <base> --state merged`). If it is gone or merged, rebase
+onto main (`git rebase --onto origin/main <base-sha> HEAD`), rerun the verification
+commands the rebase invalidates, and use main as the base.
 
 Invoke `/draft-pr` with the base and the prepared body file. It pushes and creates or
 updates the draft once; skip `/update-pr-description` when the body was already supplied.
