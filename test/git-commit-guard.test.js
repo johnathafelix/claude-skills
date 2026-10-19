@@ -41,6 +41,19 @@ const cases = [
   { subject: "Feat: add thing", allowed: false },
 ];
 
+test("allows a 75-char subject", () => {
+  const subject = "fix: " + "a".repeat(70);
+
+  assert.strictEqual(runGuard(subject), "");
+});
+
+test("denies a 76-char subject and asks for under 72", () => {
+  const out = runGuard("fix: " + "a".repeat(71));
+
+  assert.match(out, /"permissionDecision":"deny"/);
+  assert.match(out, /subject is 76 chars; keep it under 72/);
+});
+
 for (const { subject, allowed } of cases) {
   test(`${allowed ? "allows" : "denies"}: ${subject}`, () => {
     const out = runGuard(subject);

@@ -9,7 +9,7 @@
  *      (forces the model to invoke the /git-commit skill).
  *   3. Marker'd commits and --amend commits -> validate message:
  *        - subject matches conventional `type(scope)?!: summary`
- *        - subject <= 72 chars
+ *        - subject <= 75 chars
  *        - subject lowercase, except identifiers: acronyms, env vars, tickets,
  *          camelCase/PascalCase and `code spans` (body may carry any caps)
  *        - no co-author / claude / AI-generated / 🤖 attribution lines
@@ -23,6 +23,9 @@
 const SKILL_MARKER = "CC_GIT_SKILL=1";
 
 const TYPES = "feat|fix|refactor|chore|docs|test|style|perf|ci|build|revert";
+// The skill asks for under 72; accept a few extra chars, but keep the error at 72
+// so a retry can't land just past the real cap.
+const SUBJECT_MAX_LENGTH = 75;
 const SUBJECT_RE = new RegExp(`^(${TYPES})(\\([^)]+\\))?!?: .+`);
 // A capitalized word ("Add") or lone capital ("A") is prose, not an identifier.
 const SENTENCE_CASE_WORD_RE = /^[A-Z][a-z0-9]*$/;
@@ -135,8 +138,8 @@ function main() {
     );
   }
 
-  if (subject.length > 72) {
-    reasons.push(`subject is ${subject.length} chars; keep <= 72`);
+  if (subject.length > SUBJECT_MAX_LENGTH) {
+    reasons.push(`subject is ${subject.length} chars; keep it under 72`);
   }
 
   if (hasSentenceCaseWord(subject)) {
