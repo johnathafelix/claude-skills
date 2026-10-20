@@ -16,6 +16,8 @@ The loop exits, printing what happened, when the user has to know or act:
     exit 3   another loop already watches this workdir.
 
     loop.py
+    loop.py retry-tickets <run-id>   reopen a finished run's failed tickets (after fixing the
+                                     Linear settings) so the next loop redoes them
 """
 import fcntl
 import sys
@@ -41,6 +43,17 @@ def tick(config, now):
     return runs
 
 
+def retry_tickets(config, run_id):
+    path = config["workdir"] / run_id
+    if not path.is_dir():
+        print(f"no run {run_id} in {config['workdir']}")
+        sys.exit(2)
+
+    failed = pipeline.reopen_tickets(path)
+    log(config["workdir"], run_id, f"reopened {len(failed)} failed ticket(s): {', '.join(failed) or 'none'}")
+    print(f"reopened {len(failed)} failed ticket(s) in {run_id}; the next loop redoes them")
+
+
 def main():
     try:
         config = load_config()
@@ -50,6 +63,15 @@ def main():
 
     workdir = config["workdir"]
     workdir.mkdir(parents=True, exist_ok=True)
+    if sys.argv[1:2] == ["retry-tickets"] and len(sys.argv) == 3:
+        retry_tickets(config, sys.argv[2])
+
+        return
+
+    if sys.argv[1:]:
+        print(__doc__)
+        sys.exit(2)
+
     lock = (workdir / "loop.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

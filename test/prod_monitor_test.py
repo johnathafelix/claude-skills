@@ -609,6 +609,49 @@ class Pipeline(unittest.TestCase):
         self.assertIn('context api-nil-deref: gcloud logging read failed: quota', run.notes)
         self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('finding-')), 2)
 
+    def test_failed_tickets_can_be_reopened_and_redone(self):
+        path, fake = self.start()
+        fake.linear_status = 'error'
+        for _ in range(common.MAX_ATTEMPTS):
+            pipeline.process(self.config, path)
+
+        self.assertTrue(common.is_done(path, 'run'))
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json')['status'], 'failed')
+        self.assertNotIn('api:nil-deref:handler', common.read_json(self.work / 'known-issues.json'))
+
+        self.assertEqual(pipeline.reopen_tickets(path), ['api-nil-deref'])
+        self.assertFalse(common.is_done(path, 'run'))
+        self.assertTrue(common.is_done(path, 'challenge'))
+        self.assertEqual(common.incomplete_runs(self.work), [path])
+        fake.linear_status = 'ok'
+        run = pipeline.process(self.config, path)
+        self.assertTrue(common.is_done(path, 'run'))
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json')['identifier'], 'ENG-123')
+        self.assertIn('created 1 ticket(s)', run.alerts[0])
+        self.assertEqual(pipeline.reopen_tickets(path), [])
+        self.assertTrue(common.is_done(path, 'run'))
+
+    def test_ticket_is_not_duplicated_when_another_run_ticketed_the_fingerprint_meanwhile(self):
+        path, fake = self.start()
+        for _ in range(3):
+            run = pipeline.process(self.config, path)
+            if common.is_done(path, 'challenge'):
+                break
+
+        # Simulate another run having ticketed the same fingerprint between this run's challenge and tickets stages.
+        known = common.read_json(self.work / 'known-issues.json') or {}
+        known['api:nil-deref:handler'] = {'status': 'ticketed', 'ticket': 'ENG-7', 'title': 'x'}
+        (self.work / 'known-issues.json').write_text(json.dumps(known))
+        for name in ('tickets', 'prs', 'report', 'run'):
+            (path / 'state' / f'{name}.done').unlink(missing_ok=True)
+        for result in (path / 'tickets').glob('*.json'):
+            result.unlink()
+
+        run = pipeline.process(self.config, path)
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json'), {'status': 'skipped', 'reason': 'already ticketed as ENG-7'})
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'linear-api-nil-deref'), 1)
+        self.assertEqual(run.alerts, [])
+
     def test_linear_unavailable_stops_the_loop(self):
         path, fake = self.start()
         fake.linear_status = 'unavailable'

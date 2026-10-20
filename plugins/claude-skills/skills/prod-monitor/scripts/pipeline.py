@@ -639,6 +639,13 @@ def stage_tickets(run):
         verdict = read_json(run.file("challenged-findings", f"{issue['id']}.json")) or {}
         finding = read_json(run.file("findings", f"{issue['id']}.json")) or {}
         if verdict.get("verdict") in TICKET_VERDICTS:
+            existing = run.known().get(issue["fingerprint"]) or {}
+            if existing.get("status") == "ticketed":
+                write_json_atomic(run.file("tickets", f"{issue['id']}.json"), {"status": "skipped", "reason": f"already ticketed as {existing.get('ticket', '')}"})
+                run.note(f"ticket {issue['id']}: already {existing.get('ticket', '')}, not duplicated")
+
+                continue
+
             ticket = create_ticket(run, issue, finding, verdict)
             if ticket:
                 remember(run, issue, "ticketed", ticket, now)
@@ -657,6 +664,24 @@ def stage_tickets(run):
         return False
 
     return True
+
+
+def reopen_tickets(path):
+    """Makes a finished run redo its failed tickets: their results and attempts go, and the
+    stages from tickets on lose their markers, so the next tick resumes there. Returns the ids."""
+    failed = []
+    for result in sorted(path.glob("tickets/*.json")):
+        if (read_json(result) or {}).get("status") == "failed":
+            failed.append(result.stem)
+            result.unlink()
+            (path / "state" / f"tickets-{result.stem}.attempts").unlink(missing_ok=True)
+            (path / "prs" / f"{result.stem}.json").unlink(missing_ok=True)
+
+    if failed:
+        for stage in ("tickets", "prs", "report", "run"):
+            (path / "state" / f"{stage}.done").unlink(missing_ok=True)
+
+    return failed
 
 
 def ticket_entries(run):
