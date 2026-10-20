@@ -91,6 +91,10 @@ def main():
         sys.exit(2)
 
     print(f"watching {config['gcp_project']} every {config['interval'] // 60} min, log: {workdir / 'logs'}", flush=True)
+    created = [v["name"] for v in labels.values() if v.get("created")]
+    if created:
+        log(workdir, "", f"created Linear label(s) in team {config['linear_team']}: {', '.join(created)}")
+
     log(workdir, "", f"loop started: project {config['gcp_project']}, every {config['interval']}s, labels {', '.join(v['name'] for v in labels.values()) or 'none'}")
 
     while True:

@@ -38,6 +38,15 @@ MAX_DESCRIPTION = 20000
 INVESTIGATE_TOOLS = ("Bash", "Read", "Grep", "Glob", "Write")
 LINEAR_SAVE = "mcp__claude_ai_Linear__save_issue"
 LINEAR_LABELS = "mcp__claude_ai_Linear__list_issue_labels"
+LINEAR_TEAM = "mcp__claude_ai_Linear__get_team"
+LINEAR_SAVE_LABEL = "mcp__claude_ai_Linear__save_issue_label"
+LABELS_KEEP_MISSING = "Leave a configured name out when nothing matches."
+LABELS_CREATE_MISSING = (
+    "For every configured name that nothing matched, create it: call ToolSearch with query \"select:{team_tool},{save_tool}\", "
+    "call {team_tool} once with query \"{team}\" and take the team's id, then call {save_tool} once per missing name with name set to the configured name "
+    "exactly as written and teamId set to that id, nothing else. Add {{\"configured\", \"name\", \"id\", \"created\": true}} for each, with name and id "
+    "copied from the created label. Never create a label whose lookup call failed."
+)
 RELAY_SYSTEM_PROMPT = "You relay Linear tool calls for a script and answer only in the requested JSON."
 
 TRIAGE_SCHEMA = {
@@ -113,7 +122,7 @@ LABELS_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"configured": {"type": "string"}, "name": {"type": "string"}, "id": {"type": "string"}},
+                "properties": {"configured": {"type": "string"}, "name": {"type": "string"}, "id": {"type": "string"}, "created": {"type": "boolean"}},
                 "required": ["configured", "name", "id"],
             },
         },
@@ -646,8 +655,9 @@ def cached_labels(config):
 
 def resolve_labels(config, event_log):
     """Resolves every configured label to its exact Linear name and id through one relay session
-    and caches them. Raises Stop when a label does not exist, so a typo stops the loop with the
-    reason instead of failing every ticket."""
+    and caches them. A label that does not exist is created in the team when
+    PROD_MONITOR_LINEAR_CREATE_LABELS=1; otherwise it raises Stop, so a typo stops the loop with
+    the reason instead of failing every ticket."""
     if not config["linear_labels"]:
         return {}
 
@@ -655,7 +665,9 @@ def resolve_labels(config, event_log):
     if resolved is not None:
         return resolved
 
-    prompt = render_prompt("labels", tool=LINEAR_LABELS, team=config["linear_team"], labels=json.dumps(config["linear_labels"]))
+    create = config["linear_create_labels"]
+    missing_step = LABELS_CREATE_MISSING.format(team_tool=LINEAR_TEAM, save_tool=LINEAR_SAVE_LABEL, team=config["linear_team"]) if create else LABELS_KEEP_MISSING
+    prompt = render_prompt("labels", tool=LINEAR_LABELS, team=config["linear_team"], labels=json.dumps(config["linear_labels"]), missing_step=missing_step)
     reply = session.run(
         config,
         model=config["linear_model"],
@@ -665,7 +677,7 @@ def resolve_labels(config, event_log):
         schema=LABELS_SCHEMA,
         event_log=event_log,
         tools=("ToolSearch",),
-        allowed_tools=("ToolSearch", LINEAR_LABELS),
+        allowed_tools=("ToolSearch", LINEAR_LABELS) + ((LINEAR_TEAM, LINEAR_SAVE_LABEL) if create else ()),
         plugin=False,
         system_prompt=RELAY_SYSTEM_PROMPT,
         timeout=300,
@@ -680,7 +692,7 @@ def resolve_labels(config, event_log):
     found = {}
     for item in structured.get("labels") or []:
         if isinstance(item, dict) and str(item.get("name", "")).strip().lower() == str(item.get("configured", "")).strip().lower() and item.get("id"):
-            found[str(item["configured"]).strip()] = {"name": str(item["name"]).strip(), "id": str(item["id"]).strip()}
+            found[str(item["configured"]).strip()] = {"name": str(item["name"]).strip(), "id": str(item["id"]).strip(), "created": bool(item.get("created"))}
 
     resolved = {}
     missing = []
@@ -692,9 +704,10 @@ def resolve_labels(config, event_log):
             missing.append(configured)
 
     if missing:
-        raise Stop(f"Linear label(s) not found for team {config['linear_team']}: {', '.join(missing)}. Use existing label names in PROD_MONITOR_LINEAR_LABELS (case matters for the lookup only) or create them in Linear, then invoke the skill again")
+        raise Stop(f"Linear label(s) not found for team {config['linear_team']}: {', '.join(missing)}. Use existing label names in PROD_MONITOR_LINEAR_LABELS, create them in Linear, or set PROD_MONITOR_LINEAR_CREATE_LABELS=1 to have the loop create them, then invoke the skill again")
 
-    write_json_atomic(labels_cache(config), {"team": config["linear_team"], "resolved": resolved})
+    cached = {name: {"name": v["name"], "id": v["id"]} for name, v in resolved.items()}
+    write_json_atomic(labels_cache(config), {"team": config["linear_team"], "resolved": cached})
 
     return resolved
 

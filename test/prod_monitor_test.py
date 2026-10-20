@@ -67,6 +67,8 @@ class Config(unittest.TestCase):
         config = common.load_config(self.env)
         self.assertEqual(config['namespaces'], ['payments', 'orders'])
         self.assertEqual(config['linear_labels'], ['prod-monitor', 'bug'])
+        self.assertFalse(config['linear_create_labels'])
+        self.assertTrue(common.load_config({**self.env, 'PROD_MONITOR_LINEAR_CREATE_LABELS': '1'})['linear_create_labels'])
         self.assertEqual(config['interval'], 3600)
         self.assertEqual(config['log_limit'], 5000)
         self.assertEqual(config['max_parallel'], 4)
@@ -419,6 +421,7 @@ class FakeSessions:
         self.linear_status = 'ok'
         self.worker_actionable = False
         self.bug_exists = True
+        self.label_tools = None
 
     def __call__(self, config, *, event_log, prompt, writable=(), **kwargs):
         name = event_log.stem
@@ -450,9 +453,12 @@ class FakeSessions:
             verdict = 'confirmed' if issue == 'api-nil-deref' else 'rejected'
             structured = {'verdict': verdict, 'confidence': 'high', 'summary': f'{verdict} because', 'corrected_root_cause': '', 'corrected_fix': 'add check and test' if verdict == 'confirmed' else ''}
         elif stage == 'labels':
+            self.label_tools = kwargs.get('allowed_tools')
+            creating = 'save_issue_label' in prompt
             structured = {'status': 'ok', 'detail': '', 'labels': [
-                {'configured': 'prod-monitor', 'name': 'prod-monitor', 'id': 'lbl-1'},
-                *([{'configured': 'bug', 'name': 'Bug', 'id': 'lbl-2'}] if self.bug_exists else []),
+                {'configured': 'prod-monitor', 'name': 'prod-monitor', 'id': 'lbl-1', 'created': False},
+                *([{'configured': 'bug', 'name': 'Bug', 'id': 'lbl-2', 'created': False}] if self.bug_exists else []),
+                *([{'configured': 'bug', 'name': 'bug', 'id': 'lbl-new', 'created': True}] if creating and not self.bug_exists else []),
             ]}
         elif stage == 'linear':
             structured = {'status': self.linear_status, 'detail': '', 'identifier': 'ENG-123', 'url': 'https://linear.app/eng/issue/ENG-123'}
@@ -774,9 +780,34 @@ class Pipeline(unittest.TestCase):
             pipeline.process(self.config, path)
 
         self.assertIn('Linear label(s) not found for team ENG: bug', str(stop.exception))
+        self.assertIn('PROD_MONITOR_LINEAR_CREATE_LABELS=1', str(stop.exception))
         self.assertFalse((path / 'tickets' / 'api-nil-deref.json').exists())
         self.assertFalse((self.work / 'linear-labels.json').exists())
         self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('linear-')), 0)
+
+    def test_missing_label_is_created_when_opted_in(self):
+        config = common.load_config({**self.env, 'PROD_MONITOR_LINEAR_CREATE_LABELS': '1'})
+        path = pipeline.create_run(config, self.now)
+        fake = FakeSessions(path)
+        fake.bug_exists = False
+        with patch.object(pipeline.session, 'run', fake):
+            pipeline.process(config, path)
+
+        labels_prompt = [c for c in fake.calls if c[0] == 'labels'][0][3]
+        self.assertIn('call mcp__claude_ai_Linear__get_team once with query "ENG"', labels_prompt)
+        self.assertIn('call mcp__claude_ai_Linear__save_issue_label once per missing name', labels_prompt)
+        self.assertEqual(fake.label_tools, ('ToolSearch', pipeline.LINEAR_LABELS, pipeline.LINEAR_TEAM, pipeline.LINEAR_SAVE_LABEL))
+        linear_prompt = [c for c in fake.calls if c[0] == 'linear-api-nil-deref'][0][3]
+        self.assertIn('labels: ["lbl-1", "lbl-new"]  (label IDs, already verified to exist: prod-monitor, bug', linear_prompt)
+        self.assertEqual(common.read_json(self.work / 'linear-labels.json')['resolved']['bug'], {'name': 'bug', 'id': 'lbl-new'})
+
+    def test_without_opt_in_the_relay_may_not_create_labels(self):
+        path, fake = self.start()
+        pipeline.process(self.config, path)
+        labels_prompt = [c for c in fake.calls if c[0] == 'labels'][0][3]
+        self.assertIn('Leave a configured name out when nothing matches.', labels_prompt)
+        self.assertNotIn('save_issue_label', labels_prompt)
+        self.assertEqual(fake.label_tools, ('ToolSearch', pipeline.LINEAR_LABELS))
 
     def test_label_cache_is_reused_only_for_the_same_team_and_labels(self):
         common.write_json_atomic(self.work / 'linear-labels.json', {'team': 'ENG', 'resolved': {'prod-monitor': {'name': 'prod-monitor', 'id': 'x'}, 'bug': {'name': 'Bug', 'id': 'y'}}})

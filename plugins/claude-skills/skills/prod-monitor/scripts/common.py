@@ -95,6 +95,7 @@ def load_config(env=None):
         "linear_team": required["linear_team"],
         "linear_project": required["linear_project"],
         "linear_labels": labels,
+        "linear_create_labels": env.get("PROD_MONITOR_LINEAR_CREATE_LABELS", "0") == "1",
         "workdir": pathlib.Path(required["workdir"]).expanduser(),
         "min_severity": env_choice(env, "PROD_MONITOR_MIN_SEVERITY", "WARNING", SEVERITIES),
         "extra_filter": env.get("PROD_MONITOR_EXTRA_FILTER", "").strip(),

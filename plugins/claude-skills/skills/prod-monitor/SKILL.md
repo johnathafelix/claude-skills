@@ -49,7 +49,9 @@ Optional:
 - `PROD_MONITOR_LINEAR_LABELS`: comma-separated label names put on every ticket;
   unset or empty means no labels. Names are resolved to their Linear IDs when the loop
   starts (case-insensitive, exact name, cached in `<workdir>/linear-labels.json`); a
-  name that does not exist stops the loop with exit 2 before any ticket is attempted.
+  name that does not exist stops the loop with exit 2 before any ticket is attempted,
+  unless `PROD_MONITOR_LINEAR_CREATE_LABELS=1`, in which case the loop creates it in the
+  team (exact configured name, default color, no group) and logs that it did.
 - `PROD_MONITOR_INTERVAL`: `30m`, `1h`, `2h`, ... Default `1h`.
 - `PROD_MONITOR_MIN_SEVERITY` (default `WARNING`), `PROD_MONITOR_EXTRA_FILTER` (a
   Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000
