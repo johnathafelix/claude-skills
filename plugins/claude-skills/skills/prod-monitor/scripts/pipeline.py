@@ -3,6 +3,7 @@
 
     fetch      gcloud logging read for the run's window -> gcp-logs/ (no model)
     triage     one opus session classifies the digest -> triage/
+    context    gcloud logging read, all severities around each issue's samples -> triage/issues/ (no model)
     findings   one opus session per actionable, unknown issue -> findings/
     challenge  one opus session per finding, high effort -> challenged-findings/
     tickets    one sonnet relay session per confirmed finding -> tickets/, Linear
@@ -346,6 +347,29 @@ def stage_triage(run):
     return True
 
 
+# --- context -----------------------------------------------------------------------
+
+
+def fetch_context(run, issue):
+    """All severities around the issue's sample entries, so investigators see the lead-up without querying."""
+    issue_data = read_json(run.file("triage", "issues", f"{issue['id']}.json")) or issue
+    entries, window, error = gcp.read_context(run.config, issue_data)
+    write_json_atomic(run.file("triage", "issues", f"{issue['id']}.context.json"), {"window": window, "error": error, "entries": entries})
+    write_text_atomic(run.file("triage", "issues", f"{issue['id']}.context.md"), gcp.render_context(issue_data, entries, window, error, run.config["context_limit"]))
+    if error:
+        run.note(f"context {issue['id']}: {error}")
+    else:
+        run.note(f"context {issue['id']}: {len(entries)} entries for {window['start']}..{window['end']}")
+
+
+def stage_context(run):
+    for issue in to_investigate(run):
+        if not run.file("triage", "issues", f"{issue['id']}.context.json").exists():
+            fetch_context(run, issue)
+
+    return True
+
+
 # --- findings and challenge ------------------------------------------------------------
 
 
@@ -382,6 +406,7 @@ def investigate(run, issue):
         "finding",
         run_dir=run.path,
         issue_file=run.file("triage", "issues", f"{issue['id']}.json"),
+        context_file=run.file("triage", "issues", f"{issue['id']}.context.md"),
         output=output,
         repos_dir=run.config["repos_dir"],
         worktrees_dir=run.workdir / "worktrees",
@@ -439,6 +464,7 @@ def challenge(run, issue):
         "challenge",
         run_dir=run.path,
         issue_file=run.file("triage", "issues", f"{issue['id']}.json"),
+        context_file=run.file("triage", "issues", f"{issue['id']}.context.md"),
         finding_file=run.file("findings", f"{issue['id']}.md"),
         output=output,
         repos_dir=run.config["repos_dir"],
@@ -762,6 +788,7 @@ def stage_report(run):
 STAGES = (
     ("fetch", stage_fetch),
     ("triage", stage_triage),
+    ("context", stage_context),
     ("findings", stage_findings),
     ("challenge", stage_challenge),
     ("tickets", stage_tickets),

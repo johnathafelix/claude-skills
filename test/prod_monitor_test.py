@@ -70,6 +70,7 @@ class Config(unittest.TestCase):
         self.assertEqual(config['interval'], 3600)
         self.assertEqual(config['log_limit'], 5000)
         self.assertEqual(config['max_parallel'], 4)
+        self.assertEqual((config['context_before'], config['context_after'], config['context_limit']), (300, 60, 500))
         self.assertFalse(config['open_prs'])
         self.assertEqual((config['triage_model'], config['triage_effort']), ('opus', 'medium'))
         self.assertEqual((config['findings_model'], config['findings_effort']), ('opus', 'high'))
@@ -189,6 +190,28 @@ class Digest(unittest.TestCase):
     def test_normalize_strips_ids(self):
         self.assertEqual(gcp.normalize('order 123 failed for 3f2504e0-4f89-11d3-9a0c-0305e82c3301 at 7f3a9c2b1d4e'), 'order # failed for <uuid> at <hex>')
 
+    def test_context_filter_scopes_by_pods_and_traces_or_falls_back_to_service(self):
+        query = gcp.context_filter('payments', {'api-1', 'api-2'}, {'projects/p/traces/abc'}, 'api', '2026-10-20T09:55:00Z', '2026-10-20T10:01:06Z')
+        self.assertIn('timestamp>="2026-10-20T09:55:00Z" AND timestamp<"2026-10-20T10:01:06Z"', query)
+        self.assertIn('resource.labels.namespace_name="payments"', query)
+        self.assertIn('(resource.labels.pod_name=("api-1" OR "api-2") OR trace=("projects/p/traces/abc"))', query)
+        self.assertNotIn('severity', query)
+        fallback = gcp.context_filter('payments', set(), set(), 'api', 'a', 'b')
+        self.assertIn('(resource.labels.container_name="api")', fallback)
+
+    def test_context_window_pads_the_samples(self):
+        samples = [entry('2026-10-20T10:00:05.123456Z', 'ERROR', 'x'), entry('2026-10-20T10:00:01Z', 'ERROR', 'y')]
+        self.assertEqual(gcp.context_window(samples, 300, 60), ('2026-10-20T09:55:01Z', '2026-10-20T10:01:06Z'))
+        self.assertIsNone(gcp.context_window([{}], 300, 60))
+
+    def test_render_context_marks_samples(self):
+        issue = {'id': 'x', 'sample_entries': [{**ENTRIES[0], 'insertId': 'a'}]}
+        entries = [{**entry('2026-10-20T09:59:59Z', 'INFO', 'handling order 123'), 'insertId': 'z'}, {**ENTRIES[0], 'insertId': 'a'}]
+        text = gcp.render_context(issue, entries, {'start': 's', 'end': 'e'}, '', 500)
+        self.assertIn('   2026-10-20T09:59:59Z INFO     api-7d9f8c6b5-ab12c handling order 123', text)
+        self.assertIn('>> 2026-10-20T10:00:01Z ERROR    api-7d9f8c6b5-ab12c nil pointer', text)
+        self.assertIn('Context fetch failed: boom', gcp.render_context(issue, [], None, 'boom', 500))
+
     def test_digest_groups_by_signature_and_orders_by_severity_then_count(self):
         summary = gcp.digest(ENTRIES)
         self.assertEqual(summary['total'], 4)
@@ -234,6 +257,21 @@ class FakeTools(unittest.TestCase):
         self.assertEqual(argv[:3], ['logging', 'read', gcp.build_filter(['payments', 'orders'], '2026-10-20T09:00:00Z', '2026-10-20T10:00:00Z')])
         self.assertIn('--project=prod-project', argv)
         self.assertIn('--limit=5000', argv)
+
+    def test_read_context_queries_around_the_samples_oldest_first(self):
+        (self.root / 'entries.json').write_text(json.dumps([entry('2026-10-20T10:00:00Z', 'INFO', 'start')]))
+        self.script('gcloud', f'printf "%s\\n" "$@" > "{self.root}/argv"\ncat "{self.root}/entries.json"\n')
+        issue = {'id': 'x', 'namespace': 'payments', 'service': 'api', 'sample_entries': [{**ENTRIES[0], 'trace': 'projects/p/traces/t1'}, ENTRIES[1]]}
+        entries, window, error = gcp.read_context(self.config, issue)
+        self.assertEqual(error, '')
+        self.assertEqual(len(entries), 1)
+        self.assertEqual((window['start'], window['end']), ('2026-10-20T09:55:01Z', '2026-10-20T10:01:06Z'))
+        argv = (self.root / 'argv').read_text().splitlines()
+        self.assertIn('resource.labels.pod_name=("api-7d9f8c6b5-ab12c")', argv[2])
+        self.assertIn('trace=("projects/p/traces/t1")', argv[2])
+        self.assertIn('--limit=500', argv)
+        self.assertIn('--order=asc', argv)
+        self.assertEqual(gcp.read_context(self.config, {'sample_entries': []})[2], 'the issue has no timestamped sample entries')
 
     def test_read_logs_reports_failures(self):
         self.script('gcloud', 'echo "ERROR: (gcloud.logging.read) You do not currently have an active account selected." >&2\nexit 1\n')
@@ -376,6 +414,10 @@ class Pipeline(unittest.TestCase):
         self.read_logs = patch.object(gcp, 'read_logs', return_value=(list(ENTRIES), ''))
         self.read_logs.start()
         self.addCleanup(self.read_logs.stop)
+        self.context = [entry('2026-10-20T09:59:58Z', 'INFO', 'request started order=123'), ENTRIES[0]]
+        self.read_context = patch.object(gcp, 'read_context', return_value=(self.context, {'start': '2026-10-20T09:55:01Z', 'end': '2026-10-20T10:01:06Z', 'query': 'q'}, ''))
+        self.read_context.start()
+        self.addCleanup(self.read_context.stop)
 
     def start(self, fail=()):
         path = pipeline.create_run(self.config, self.now)
@@ -406,6 +448,16 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(len(sample['sample_entries']), 2)
         self.assertEqual(common.read_json(path / 'triage' / 'plan.json')['worker-retry'], {'action': 'ignore'})
 
+        context = common.read_json(path / 'triage' / 'issues' / 'api-nil-deref.context.json')
+        self.assertEqual(len(context['entries']), 2)
+        self.assertIn('request started order=123', (path / 'triage' / 'issues' / 'api-nil-deref.context.md').read_text())
+        self.assertFalse((path / 'triage' / 'issues' / 'worker-retry.context.json').exists())
+        self.assertTrue(common.is_done(path, 'context'))
+        finding_prompt = [c for c in fake.calls if c[0] == 'finding-api-nil-deref'][0][3]
+        self.assertIn(str(path / 'triage' / 'issues' / 'api-nil-deref.context.md'), finding_prompt)
+        challenge_prompt = [c for c in fake.calls if c[0] == 'challenge-api-nil-deref'][0][3]
+        self.assertIn('api-nil-deref.context.md', challenge_prompt)
+
         # The model wrote one finding file; the other is generated from the structured reply.
         self.assertEqual((path / 'findings' / 'api-nil-deref.md').read_text(), '# Finding\n\nroot cause here\n')
         self.assertIn('generated from its structured reply', (path / 'findings' / 'checkout-timeout.md').read_text())
@@ -432,6 +484,7 @@ class Pipeline(unittest.TestCase):
 
         log = (self.work / 'logs' / '20-10-2026.txt').read_text()
         self.assertIn('fetch: 4 entries in 3 groups', log)
+        self.assertIn('context api-nil-deref: 2 entries for 2026-10-20T09:55:01Z..2026-10-20T10:01:06Z', log)
         self.assertIn('triage: 3 issues (2 errors, 1 warnings); 2 to investigate, 0 known, 1 not actionable', log)
         self.assertIn('ticket api-nil-deref: ENG-123', log)
         self.assertIn('run complete', log)
@@ -543,6 +596,18 @@ class Pipeline(unittest.TestCase):
         self.assertIn('No log entries', (path / 'triage' / 'triage.md').read_text())
         self.assertIn('- none', (path / 'report.md').read_text())
         self.assertEqual(run.alerts, [])
+
+    def test_context_fetch_failure_is_noted_and_the_run_goes_on(self):
+        self.read_context.stop()
+        with patch.object(gcp, 'read_context', return_value=([], None, 'gcloud logging read failed: quota')):
+            path, fake = self.start()
+            run = pipeline.process(self.config, path)
+
+        self.read_context.start()
+        self.assertTrue(common.is_done(path, 'run'))
+        self.assertIn('Context fetch failed: gcloud logging read failed: quota', (path / 'triage' / 'issues' / 'api-nil-deref.context.md').read_text())
+        self.assertIn('context api-nil-deref: gcloud logging read failed: quota', run.notes)
+        self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('finding-')), 2)
 
     def test_linear_unavailable_stops_the_loop(self):
         path, fake = self.start()

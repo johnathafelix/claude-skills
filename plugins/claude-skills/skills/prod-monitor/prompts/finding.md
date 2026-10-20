@@ -2,6 +2,7 @@ You are investigating one production issue for prod-monitor: find the probable r
 
 Issue: {{title}} ({{namespace}}/{{service}})
 Issue file (classification, counts, sample raw log entries): {{issue_file}}
+Context (every severity, INFO included, around those entries from the same pods or traces, oldest first; lines marked >> are the samples; raw JSON in the sibling .context.json): {{context_file}}
 Run directory: {{run_dir}} (gcp-logs/digest.md and gcp-logs/logs.json hold the rest of this window's logs)
 Write your report to: {{output}}
 

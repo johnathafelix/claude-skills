@@ -10,7 +10,7 @@ import json
 import re
 import subprocess
 
-from common import SEVERITIES
+from common import SEVERITIES, from_iso, iso
 
 GCLOUD_TIMEOUT_SECONDS = 600
 SAMPLE_ENTRIES = 5
@@ -36,15 +36,14 @@ def build_filter(namespaces, start, end, min_severity="WARNING", extra=""):
     return " AND ".join(clauses)
 
 
-def read_logs(config, start, end):
-    """(entries sorted by timestamp, error text). Entries are the newest `log_limit` ones."""
-    query = build_filter(config["namespaces"], start, end, config["min_severity"], config["extra_filter"])
+def run_query(project, query, limit, order):
+    """(entries sorted by timestamp, error text) for one gcloud logging read."""
     argv = [
         "gcloud", "logging", "read", query,
-        f"--project={config['gcp_project']}",
+        f"--project={project}",
         "--format=json",
-        f"--limit={config['log_limit']}",
-        "--order=desc",
+        f"--limit={limit}",
+        f"--order={order}",
     ]
 
     try:
@@ -66,6 +65,97 @@ def read_logs(config, start, end):
         return [], "gcloud returned something other than a list of entries"
 
     return sorted(entries, key=lambda e: e.get("timestamp", "")), ""
+
+
+def read_logs(config, start, end):
+    """The newest `log_limit` entries of the run's window, at or above the severity floor."""
+    query = build_filter(config["namespaces"], start, end, config["min_severity"], config["extra_filter"])
+
+    return run_query(config["gcp_project"], query, config["log_limit"], "desc")
+
+
+def pod_of(entry):
+    return ((entry.get("resource") or {}).get("labels") or {}).get("pod_name", "")
+
+
+def trace_of(entry):
+    return entry.get("trace") or ""
+
+
+def context_filter(namespace, pods, traces, service, start, end):
+    """All severities around an issue: its pods or traces, else its service, in its namespace."""
+    scopes = []
+    if pods:
+        scopes.append("resource.labels.pod_name=(" + " OR ".join(json.dumps(p) for p in sorted(pods)) + ")")
+
+    if traces:
+        scopes.append("trace=(" + " OR ".join(json.dumps(t) for t in sorted(traces)) + ")")
+
+    if not scopes:
+        scopes.append(f"resource.labels.container_name={json.dumps(service)}")
+
+    return " AND ".join([
+        f'timestamp>="{start}"',
+        f'timestamp<"{end}"',
+        f"resource.labels.namespace_name={json.dumps(namespace)}",
+        "(" + " OR ".join(scopes) + ")",
+    ])
+
+
+def context_window(entries, before, after):
+    """[start, end) ISO timestamps: `before` seconds before the first sample to `after` after the last."""
+    stamps = sorted(e.get("timestamp", "") for e in entries if e.get("timestamp"))
+    if not stamps:
+        return None
+
+    first = from_iso(stamps[0][:19] + "Z")
+    last = from_iso(stamps[-1][:19] + "Z")
+
+    return iso(first - before), iso(last + after + 1)
+
+
+def read_context(config, issue):
+    """(entries, window, error): every severity around the issue's sample entries, oldest first."""
+    samples = issue.get("sample_entries") or []
+    window = context_window(samples, config["context_before"], config["context_after"])
+    if window is None:
+        return [], None, "the issue has no timestamped sample entries"
+
+    query = context_filter(
+        issue.get("namespace", ""),
+        {pod_of(e) for e in samples if pod_of(e)},
+        {trace_of(e) for e in samples if trace_of(e)},
+        issue.get("service", ""),
+        *window,
+    )
+    entries, error = run_query(config["gcp_project"], query, config["context_limit"], "asc")
+
+    return entries, {"start": window[0], "end": window[1], "query": query}, error
+
+
+def render_context(issue, entries, window, error, limit):
+    """Chronological lines; the issue's own sample entries are marked with >>."""
+    marked = {(e.get("timestamp"), e.get("insertId")) for e in issue.get("sample_entries") or []}
+    lines = [f"# Context for {issue.get('id', '')}", ""]
+    if error:
+        lines += [f"Context fetch failed: {error}", ""]
+
+        return "\n".join(lines)
+
+    lines += [
+        f"- Window: {window['start']} to {window['end']} (UTC), all severities",
+        f"- Entries: {len(entries)}" + (f" (truncated at {limit}; the oldest entries were kept)" if len(entries) >= limit else ""),
+        "- Lines starting with >> are the issue's own sample entries",
+        "",
+        "```",
+    ]
+    for entry in entries:
+        mark = ">>" if (entry.get("timestamp"), entry.get("insertId")) in marked else "  "
+        lines.append(f"{mark} {entry.get('timestamp', '')} {entry.get('severity', 'DEFAULT'):8} {pod_of(entry) or service_of(entry)} {message_of(entry)[:400]}")
+
+    lines += ["```", ""]
+
+    return "\n".join(lines)
 
 
 def message_of(entry):

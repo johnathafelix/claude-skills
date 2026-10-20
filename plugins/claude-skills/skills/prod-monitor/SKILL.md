@@ -51,6 +51,9 @@ Optional:
 - `PROD_MONITOR_MIN_SEVERITY` (default `WARNING`), `PROD_MONITOR_EXTRA_FILTER` (a
   Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000,
   the newest entries are kept when a window has more).
+- `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` (default 5), `PROD_MONITOR_CONTEXT_AFTER_MINUTES`
+  (default 1) and `PROD_MONITOR_CONTEXT_LIMIT` (default 500): how much all-severity
+  context is fetched around each issue's sample entries for the investigators.
 - `PROD_MONITOR_MAX_PARALLEL` (default 4 sessions at once),
   `PROD_MONITOR_SESSION_TIMEOUT_SECONDS` (default 1800),
   `PROD_MONITOR_SKIP_TTL_HOURS` (default 24: how long a rejected, inconclusive or
@@ -110,6 +113,7 @@ redoes only what has no result yet:
 |---|---|---|
 | fetch | none (`gcloud logging read`, severity ≥ WARNING, the namespaces) | `gcp-logs/logs.json`, `digest.md` (deterministic grouping by service, severity and normalized message) |
 | triage | opus, medium | `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
+| context | none (`gcloud logging read`, every severity, INFO included) | `triage/issues/<issue>.context.md` + `.json`: the entries from the same pods or traces as the issue's samples, from `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` before the first sample to `PROD_MONITOR_CONTEXT_AFTER_MINUTES` after the last, oldest first, up to `PROD_MONITOR_CONTEXT_LIMIT` |
 | findings | opus, high, one session per issue, in parallel | `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
 | challenge | opus, high, one session per finding | `challenged-findings/<issue>.md` + `.json`: confirmed, partially_confirmed or rejected, with corrections |
 | tickets | sonnet relay, one Linear `save_issue` per confirmed or partially confirmed finding | `tickets/<issue>.json`; `<workdir>/known-issues.json` remembers the fingerprint and ticket |
@@ -130,7 +134,8 @@ rewritten.
 Investigating sessions get `Bash`, `Read`, `Grep`, `Glob` and `Write`, with
 `PROD_MONITOR_GUARD=1` so the hook keeps production and the user's checkouts
 read-only, and `PROD_MONITOR_WRITABLE` limited to the stage's output directory and
-`<workdir>/worktrees`. They read code from detached worktrees of `origin/<default>`,
-may run `gcloud logging read` for more context and read-only `kubectl` on the pods.
+`<workdir>/worktrees`. They start from the issue's all-severity context file, read code from detached
+worktrees of `origin/<default>`, may run `gcloud logging read` for anything the
+context window misses and read-only `kubectl` on the pods.
 The Linear relay session has only the `save_issue` tool, no hooks and no skills, and
 receives the ticket text as data.

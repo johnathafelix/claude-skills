@@ -2,6 +2,7 @@ You are the independent challenger for one prod-monitor finding. Another agent i
 
 Issue: {{title}}
 Issue file (classification, counts, sample raw log entries): {{issue_file}}
+Context (every severity, INFO included, around those entries from the same pods or traces, oldest first; lines marked >> are the samples; raw JSON in the sibling .context.json): {{context_file}}
 Finding to challenge: {{finding_file}}
 Run directory: {{run_dir}} (gcp-logs/digest.md and gcp-logs/logs.json hold the rest of this window's logs)
 Write your verdict to: {{output}}
