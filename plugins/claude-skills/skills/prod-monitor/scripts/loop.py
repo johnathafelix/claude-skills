@@ -79,8 +79,19 @@ def main():
         print(f"another loop already watches {workdir}")
         sys.exit(3)
 
+    try:
+        labels = pipeline.resolve_labels(config, workdir / "logs" / "labels-session.log")
+    except pipeline.StageError as error:
+        log(workdir, "", f"stopped: {error}")
+        print(f"{error}; invoke the skill again")
+        sys.exit(2)
+    except Stop as stop:
+        log(workdir, "", f"stopped: {stop}")
+        print(stop)
+        sys.exit(2)
+
     print(f"watching {config['gcp_project']} every {config['interval'] // 60} min, log: {workdir / 'logs'}", flush=True)
-    log(workdir, "", f"loop started: project {config['gcp_project']}, every {config['interval']}s")
+    log(workdir, "", f"loop started: project {config['gcp_project']}, every {config['interval']}s, labels {', '.join(v['name'] for v in labels.values()) or 'none'}")
 
     while True:
         try:

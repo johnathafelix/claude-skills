@@ -37,6 +37,7 @@ SAMPLE_LINES = 3
 MAX_DESCRIPTION = 20000
 INVESTIGATE_TOOLS = ("Bash", "Read", "Grep", "Glob", "Write")
 LINEAR_SAVE = "mcp__claude_ai_Linear__save_issue"
+LINEAR_LABELS = "mcp__claude_ai_Linear__list_issue_labels"
 RELAY_SYSTEM_PROMPT = "You relay Linear tool calls for a script and answer only in the requested JSON."
 
 TRIAGE_SCHEMA = {
@@ -101,6 +102,23 @@ LINEAR_SCHEMA = {
         "url": {"type": "string"},
     },
     "required": ["status", "identifier", "url"],
+}
+
+LABELS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"enum": ["ok", "unavailable", "error"]},
+        "detail": {"type": "string"},
+        "labels": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"configured": {"type": "string"}, "name": {"type": "string"}, "id": {"type": "string"}},
+                "required": ["configured", "name", "id"],
+            },
+        },
+    },
+    "required": ["status", "labels"],
 }
 
 PR_SCHEMA = {
@@ -613,6 +631,74 @@ def stage_challenge(run):
 # --- tickets ----------------------------------------------------------------------
 
 
+def labels_cache(config):
+    return config["workdir"] / "linear-labels.json"
+
+
+def cached_labels(config):
+    """{configured name: {name, id}} when the cache matches the configured team and labels."""
+    cache = read_json(labels_cache(config)) or {}
+    if cache.get("team") == config["linear_team"] and sorted(cache.get("resolved", {})) == sorted(config["linear_labels"]):
+        return cache["resolved"]
+
+    return None
+
+
+def resolve_labels(config, event_log):
+    """Resolves every configured label to its exact Linear name and id through one relay session
+    and caches them. Raises Stop when a label does not exist, so a typo stops the loop with the
+    reason instead of failing every ticket."""
+    if not config["linear_labels"]:
+        return {}
+
+    resolved = cached_labels(config)
+    if resolved is not None:
+        return resolved
+
+    prompt = render_prompt("labels", tool=LINEAR_LABELS, team=config["linear_team"], labels=json.dumps(config["linear_labels"]))
+    reply = session.run(
+        config,
+        model=config["linear_model"],
+        effort="",
+        prompt=prompt,
+        cwd=config["workdir"],
+        schema=LABELS_SCHEMA,
+        event_log=event_log,
+        tools=("ToolSearch",),
+        allowed_tools=("ToolSearch", LINEAR_LABELS),
+        plugin=False,
+        system_prompt=RELAY_SYSTEM_PROMPT,
+        timeout=300,
+    )
+    structured = reply.get("structured") or {}
+    if reply["status"] != "ok" or structured.get("status") == "error":
+        raise StageError(f"label lookup: {reply['detail'] or structured.get('detail') or 'failed'}")
+
+    if structured.get("status") == "unavailable":
+        raise Stop(f"Linear connector unavailable: {structured.get('detail', '')}; connect it with /mcp and invoke the skill again")
+
+    found = {}
+    for item in structured.get("labels") or []:
+        if isinstance(item, dict) and str(item.get("name", "")).strip().lower() == str(item.get("configured", "")).strip().lower() and item.get("id"):
+            found[str(item["configured"]).strip()] = {"name": str(item["name"]).strip(), "id": str(item["id"]).strip()}
+
+    resolved = {}
+    missing = []
+    for configured in config["linear_labels"]:
+        match = found.get(configured) or next((v for k, v in found.items() if k.lower() == configured.lower()), None)
+        if match:
+            resolved[configured] = match
+        else:
+            missing.append(configured)
+
+    if missing:
+        raise Stop(f"Linear label(s) not found for team {config['linear_team']}: {', '.join(missing)}. Use existing label names in PROD_MONITOR_LINEAR_LABELS (case matters for the lookup only) or create them in Linear, then invoke the skill again")
+
+    write_json_atomic(labels_cache(config), {"team": config["linear_team"], "resolved": resolved})
+
+    return resolved
+
+
 def sample_lines(issue_data):
     lines = []
     for entry in issue_data.get("sample_entries") or []:
@@ -659,14 +745,26 @@ def ticket_description(run, issue, finding, verdict):
     return text if len(text) <= MAX_DESCRIPTION else text[: MAX_DESCRIPTION - 20] + "\n\n_(truncated)_"
 
 
+def labels_line(config, labels):
+    """The labels argument for the relay prompt: verified IDs, or the field left out entirely."""
+    if not config["linear_labels"]:
+        return "   labels: leave this field out, no labels are configured"
+
+    ids = json.dumps([labels[name]["id"] for name in config["linear_labels"]])
+    names = ", ".join(labels[name]["name"] for name in config["linear_labels"])
+
+    return f"   labels: {ids}  (label IDs, already verified to exist: {names}; copy them character for character)"
+
+
 def create_ticket(run, issue, finding, verdict):
     result = run.file("tickets", f"{issue['id']}.json")
+    labels = resolve_labels(run.config, run.file("sessions", "labels.log"))
     prompt = render_prompt(
         "linear",
         tool=LINEAR_SAVE,
         team=run.config["linear_team"],
         project=run.config["linear_project"],
-        labels=json.dumps(run.config["linear_labels"]),
+        labels_line=labels_line(run.config, labels),
         priority=PRIORITY[issue["severity"]],
         title=ticket_title(issue),
         description=ticket_description(run, issue, finding, verdict),

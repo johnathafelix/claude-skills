@@ -86,7 +86,9 @@ class Config(unittest.TestCase):
                 common.parse_interval(bad)
 
     def test_missing_values_stop(self):
-        for name in ('PROD_MONITOR_GCP_PROJECT', 'PROD_MONITOR_NAMESPACES', 'PROD_MONITOR_LINEAR_LABELS', 'PROD_MONITOR_WORKDIR'):
+        self.assertEqual(common.load_config({**self.env, 'PROD_MONITOR_LINEAR_LABELS': ''})['linear_labels'], [])
+        self.assertEqual(common.load_config({k: v for k, v in self.env.items() if k != 'PROD_MONITOR_LINEAR_LABELS'})['linear_labels'], [])
+        for name in ('PROD_MONITOR_GCP_PROJECT', 'PROD_MONITOR_NAMESPACES', 'PROD_MONITOR_WORKDIR'):
             env = {**self.env, name: ' '}
             with self.assertRaises(common.Stop, msg=name):
                 common.load_config(env)
@@ -166,7 +168,7 @@ class Runs(unittest.TestCase):
         self.assertTrue(text[1].endswith(' second'))
 
     def test_render_prompt_replaces_every_placeholder(self):
-        text = common.render_prompt('linear', tool='t', team='ENG', project='P', labels='["a"]', priority=2, title='T', description='D')
+        text = common.render_prompt('linear', tool='t', team='ENG', project='P', labels_line='   labels: ["a"]', priority=2, title='T', description='D')
         self.assertIn('team: ENG', text)
         self.assertNotIn('{{', text)
         with self.assertRaises(KeyError):
@@ -416,6 +418,7 @@ class FakeSessions:
         self.digests = []
         self.linear_status = 'ok'
         self.worker_actionable = False
+        self.bug_exists = True
 
     def __call__(self, config, *, event_log, prompt, writable=(), **kwargs):
         name = event_log.stem
@@ -446,6 +449,11 @@ class FakeSessions:
             issue = name[len('challenge-'):]
             verdict = 'confirmed' if issue == 'api-nil-deref' else 'rejected'
             structured = {'verdict': verdict, 'confidence': 'high', 'summary': f'{verdict} because', 'corrected_root_cause': '', 'corrected_fix': 'add check and test' if verdict == 'confirmed' else ''}
+        elif stage == 'labels':
+            structured = {'status': 'ok', 'detail': '', 'labels': [
+                {'configured': 'prod-monitor', 'name': 'prod-monitor', 'id': 'lbl-1'},
+                *([{'configured': 'bug', 'name': 'Bug', 'id': 'lbl-2'}] if self.bug_exists else []),
+            ]}
         elif stage == 'linear':
             structured = {'status': self.linear_status, 'detail': '', 'identifier': 'ENG-123', 'url': 'https://linear.app/eng/issue/ENG-123'}
         elif stage == 'pr':
@@ -560,7 +568,9 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([c for c in fake.calls if c[0] == 'finding-api-nil-deref'][0][1:3], ('opus', 'high'))
         self.assertEqual([c for c in fake.calls if c[0] == 'triage'][0][1:3], ('opus', 'medium'))
         linear_prompt = [c for c in fake.calls if c[0] == 'linear-api-nil-deref'][0][3]
-        self.assertIn('labels: ["prod-monitor", "bug"]', linear_prompt)
+        self.assertIn('labels: ["lbl-1", "lbl-2"]  (label IDs, already verified to exist: prod-monitor, Bug', linear_prompt)
+        self.assertEqual(common.read_json(self.work / 'linear-labels.json'), {'team': 'ENG', 'resolved': {'prod-monitor': {'name': 'prod-monitor', 'id': 'lbl-1'}, 'bug': {'name': 'Bug', 'id': 'lbl-2'}}})
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'labels'), 1)
         self.assertIn('title: [api] nil deref in order handler', linear_prompt)
         self.assertIn('priority: 2', linear_prompt)
         self.assertIn('add check and test', linear_prompt)
@@ -569,7 +579,7 @@ class Pipeline(unittest.TestCase):
         # Running again does nothing: every stage is done.
         again = pipeline.process(self.config, path)
         self.assertEqual(again.notes, [])
-        self.assertEqual(len(fake.calls), 6)
+        self.assertEqual(len(fake.calls), 7)
 
     def test_second_run_skips_known_issues_and_counts_recurrences(self):
         path, fake = self.start()
@@ -742,6 +752,39 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json'), {'status': 'skipped', 'reason': 'already ticketed as ENG-7'})
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'linear-api-nil-deref'), 1)
         self.assertEqual(run.alerts, [])
+
+    def test_without_labels_no_lookup_runs_and_the_field_is_left_out(self):
+        config = common.load_config({**self.env, 'PROD_MONITOR_LINEAR_LABELS': ''})
+        path = pipeline.create_run(config, self.now)
+        fake = FakeSessions(path)
+        with patch.object(pipeline.session, 'run', fake):
+            pipeline.process(config, path)
+
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json')['identifier'], 'ENG-123')
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'labels'), 0)
+        linear_prompt = [c for c in fake.calls if c[0] == 'linear-api-nil-deref'][0][3]
+        self.assertIn('labels: leave this field out, no labels are configured', linear_prompt)
+        self.assertNotIn('lbl-', linear_prompt)
+        self.assertFalse((self.work / 'linear-labels.json').exists())
+
+    def test_missing_label_stops_the_loop_before_any_ticket(self):
+        path, fake = self.start()
+        fake.bug_exists = False
+        with self.assertRaises(common.Stop) as stop:
+            pipeline.process(self.config, path)
+
+        self.assertIn('Linear label(s) not found for team ENG: bug', str(stop.exception))
+        self.assertFalse((path / 'tickets' / 'api-nil-deref.json').exists())
+        self.assertFalse((self.work / 'linear-labels.json').exists())
+        self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('linear-')), 0)
+
+    def test_label_cache_is_reused_only_for_the_same_team_and_labels(self):
+        common.write_json_atomic(self.work / 'linear-labels.json', {'team': 'ENG', 'resolved': {'prod-monitor': {'name': 'prod-monitor', 'id': 'x'}, 'bug': {'name': 'Bug', 'id': 'y'}}})
+        self.assertEqual(pipeline.cached_labels(self.config)['bug']['id'], 'y')
+        other = common.load_config({**self.env, 'PROD_MONITOR_LINEAR_LABELS': 'prod-monitor'})
+        self.assertIsNone(pipeline.cached_labels(other))
+        other = common.load_config({**self.env, 'PROD_MONITOR_LINEAR_TEAM': 'OPS'})
+        self.assertIsNone(pipeline.cached_labels(other))
 
     def test_linear_unavailable_stops_the_loop(self):
         path, fake = self.start()

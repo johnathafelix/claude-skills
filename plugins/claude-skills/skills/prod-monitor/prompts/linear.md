@@ -3,7 +3,7 @@
    team: {{team}}
    project: {{project}}
    assignee: me
-   labels: {{labels}}
+{{labels_line}}
    priority: {{priority}}
    title: {{title}}
    description: the text between the BEGIN DESCRIPTION and END DESCRIPTION lines below, unchanged, as Markdown with literal newlines.

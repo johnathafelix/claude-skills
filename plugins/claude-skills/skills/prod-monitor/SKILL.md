@@ -42,11 +42,14 @@ Required:
   these working copies.
 - `PROD_MONITOR_LINEAR_TEAM` and `PROD_MONITOR_LINEAR_PROJECT`: where tickets go,
   by name (as the Linear connector resolves them).
-- `PROD_MONITOR_LINEAR_LABELS`: comma-separated label names put on every ticket.
 - `PROD_MONITOR_WORKDIR`: where runs, logs, reports and worktrees are stored.
 
 Optional:
 
+- `PROD_MONITOR_LINEAR_LABELS`: comma-separated label names put on every ticket;
+  unset or empty means no labels. Names are resolved to their Linear IDs when the loop
+  starts (case-insensitive, exact name, cached in `<workdir>/linear-labels.json`); a
+  name that does not exist stops the loop with exit 2 before any ticket is attempted.
 - `PROD_MONITOR_INTERVAL`: `30m`, `1h`, `2h`, ... Default `1h`.
 - `PROD_MONITOR_MIN_SEVERITY` (default `WARNING`), `PROD_MONITOR_EXTRA_FILTER` (a
   Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000

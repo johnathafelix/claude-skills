@@ -82,8 +82,6 @@ def load_config(env=None):
         raise Stop("set PROD_MONITOR_NAMESPACES (comma-separated) in the env block of ~/.claude/settings.json")
 
     labels = env_list(env, "PROD_MONITOR_LINEAR_LABELS")
-    if not labels:
-        raise Stop("set PROD_MONITOR_LINEAR_LABELS (comma-separated) in the env block of ~/.claude/settings.json")
 
     repos_dir = pathlib.Path(required["repos_dir"]).expanduser()
     if not repos_dir.is_dir():
