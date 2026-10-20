@@ -102,6 +102,21 @@ CHALLENGE_SCHEMA = {
     "required": ["verdict", "confidence", "summary", "corrected_root_cause", "corrected_fix"],
 }
 
+DEDUPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "duplicates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"issue": {"type": "string"}, "ticket": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["issue", "ticket"],
+            },
+        },
+    },
+    "required": ["duplicates"],
+}
+
 LINEAR_SCHEMA = {
     "type": "object",
     "properties": {
@@ -508,6 +523,78 @@ def to_investigate(run):
     return [issue for issue in run.issues() if plan.get(issue["id"], {}).get("action") == "investigate"]
 
 
+def new_known_entries(run, now):
+    """Active known entries this run's triage never saw: they appeared after its snapshot, for
+    example when another run's tickets were retried, so its issues could not be matched to them."""
+    seen = {item.get("fingerprint") for item in read_json(run.file("triage", "known-issues.json")) or []}
+
+    return {fp: entry for fp, entry in run.known().items() if fp not in seen and is_active(entry, now, run.config["reject_ttl"])}
+
+
+def dedupe(run, stage, issues, now):
+    """{issue id: (fingerprint, known entry)} for the issues a relay session judges to be the same
+    problem as a known issue that appeared after this run's triage. One session per stage, its
+    answer cached by its inputs so a retried stage does not ask again; a failed session is
+    noted once and nothing is deduplicated."""
+    fresh = new_known_entries(run, now)
+    if not fresh or not issues:
+        return {}
+
+    key = {"issues": sorted(issue["id"] for issue in issues), "known": sorted(fresh)}
+    cache_file = run.file("triage", f"dedupe-{stage}.json")
+    cache = read_json(cache_file) or {}
+    if cache.get("key") != key:
+        prompt = render_prompt(
+            "dedupe",
+            issues=json.dumps([{k: issue.get(k, "") for k in ("id", "title", "service", "namespace", "severity", "fingerprint", "summary")} for issue in issues], indent=1),
+            known=json.dumps([{"ticket": e.get("ticket", ""), "status": e.get("status", ""), "fingerprint": fp, "title": e.get("title", ""), "service": e.get("service", "")} for fp, e in sorted(fresh.items())], indent=1),
+        )
+        reply = run.session(
+            f"dedupe-{stage}",
+            model=run.config["linear_model"],
+            effort="",
+            prompt=prompt,
+            cwd=run.path,
+            schema=DEDUPE_SCHEMA,
+            tools=("Read",),
+            allowed_tools=("Read",),
+            plugin=False,
+            timeout=300,
+        )
+        structured = reply.get("structured") or {}
+        cache = {"key": key, "duplicates": structured.get("duplicates") or [], "error": "" if reply["status"] == "ok" else reply["detail"]}
+        write_json_atomic(cache_file, cache)
+        if cache["error"]:
+            run.note(f"{stage}: duplicate check failed, proceeding without it: {cache['error']}")
+
+    by_ticket = {entry.get("ticket"): (fp, entry) for fp, entry in fresh.items() if entry.get("ticket")}
+    by_fingerprint = {fp: (fp, entry) for fp, entry in fresh.items()}
+    matches = {}
+    for pair in cache["duplicates"]:
+        if isinstance(pair, dict):
+            match = by_ticket.get(pair.get("ticket")) or by_fingerprint.get(pair.get("ticket"))
+            if match and pair.get("issue") in key["issues"]:
+                matches[pair["issue"]] = match
+
+    return matches
+
+
+def count_recurrence(run, issue, ticket, now):
+    """Counts this run once on the known entry for the issue, found by fingerprint or by ticket,
+    and remembers the run's log signatures under it so the next digest folds them out."""
+    known = run.known()
+    fingerprint = issue["fingerprint"] if issue["fingerprint"] in known else next((fp for fp, e in known.items() if ticket and e.get("ticket") == ticket), None)
+    entry = known.get(fingerprint)
+    if not entry or entry.get("run") == run.id:
+        return
+
+    entry["recurrences"] = entry.get("recurrences", 0) + 1
+    entry["last_seen"] = iso(now)
+    entry["run"] = run.id
+    entry["signatures"] = sorted(set(entry.get("signatures") or []) | set(signatures_of(run, issue)))
+    run.save_known(known)
+
+
 def item_failed(run, stage, issue, detail, result):
     """Counts one failed attempt; after MAX_ATTEMPTS the item is recorded as failed and the stage moves on."""
     count = bump_attempts(run.path, f"{stage}-{issue['id']}")
@@ -570,6 +657,18 @@ def investigate(run, issue):
 
 def stage_findings(run):
     pending = [issue for issue in to_investigate(run) if not run.file("findings", f"{issue['id']}.json").exists()]
+    duplicates = dedupe(run, "findings", pending, time.time())
+    if duplicates:
+        plan = run.plan()
+        for issue in pending:
+            if issue["id"] in duplicates:
+                fingerprint, entry = duplicates[issue["id"]]
+                plan[issue["id"]] = {"action": "known", "ticket": entry.get("ticket", ""), "status": entry.get("status", ""), "fingerprint": fingerprint}
+                run.note(f"findings {issue['id']}: same problem as {entry.get('ticket') or entry.get('status')} ({entry.get('title', '')}), not investigated")
+
+        write_json_atomic(run.file("triage", "plan.json"), plan)
+        pending = [issue for issue in pending if issue["id"] not in duplicates]
+
     run.parallel(pending, lambda issue: investigate(run, issue))
     remaining = [issue["id"] for issue in to_investigate(run) if not run.file("findings", f"{issue['id']}.json").exists()]
     if remaining:
@@ -831,21 +930,28 @@ def remember(run, issue, status, ticket=None, now=None):
     run.save_known(known)
 
 
+def to_ticket(run):
+    """The investigated issues whose finding held up and that have no ticket result yet."""
+    plan = run.plan()
+    rows = []
+    for issue in run.issues():
+        if plan.get(issue["id"], {}).get("action") == "investigate" and not run.file("tickets", f"{issue['id']}.json").exists():
+            verdict = read_json(run.file("challenged-findings", f"{issue['id']}.json")) or {}
+            if verdict.get("verdict") in TICKET_VERDICTS:
+                rows.append(issue)
+
+    return rows
+
+
 def stage_tickets(run):
     plan = run.plan()
     now = time.time()
     pending = False
+    duplicates = dedupe(run, "tickets", to_ticket(run), now)
     for issue in run.issues():
         action = plan.get(issue["id"], {}).get("action")
         if action == "known":
-            known = run.known()
-            entry = known.get(issue["fingerprint"])
-            if entry and entry.get("run") != run.id:
-                entry["recurrences"] = entry.get("recurrences", 0) + 1
-                entry["last_seen"] = iso(now)
-                entry["run"] = run.id
-                entry["signatures"] = sorted(set(entry.get("signatures") or []) | set(signatures_of(run, issue)))
-                run.save_known(known)
+            count_recurrence(run, issue, plan[issue["id"]].get("ticket"), now)
 
             continue
 
@@ -859,6 +965,15 @@ def stage_tickets(run):
             if existing.get("status") == "ticketed":
                 write_json_atomic(run.file("tickets", f"{issue['id']}.json"), {"status": "skipped", "reason": f"already ticketed as {existing.get('ticket', '')}"})
                 run.note(f"ticket {issue['id']}: already {existing.get('ticket', '')}, not duplicated")
+
+                continue
+
+            if issue["id"] in duplicates:
+                fingerprint, entry = duplicates[issue["id"]]
+                label = entry.get("ticket") or entry.get("status", "")
+                write_json_atomic(run.file("tickets", f"{issue['id']}.json"), {"status": "skipped", "reason": f"same problem as {label}: {entry.get('title', '')}"})
+                run.note(f"ticket {issue['id']}: same problem as {label} ({entry.get('title', '')}), not duplicated")
+                count_recurrence(run, issue, entry.get("ticket"), now)
 
                 continue
 

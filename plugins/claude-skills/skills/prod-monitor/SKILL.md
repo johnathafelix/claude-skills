@@ -122,9 +122,9 @@ redoes only what has no result yet:
 | fetch | none (`gcloud logging read` per slice, severity ≥ WARNING, the namespaces) | the window is read in `PROD_MONITOR_FETCH_SLICE_MINUTES` slices, each keeping its newest share of `PROD_MONITOR_LOG_LIMIT`, so a noisy hour is sampled evenly; `gcp-logs/logs.json`, `slices.json` (per-slice counts and which hit their cap), `digest.md` (deterministic grouping by service, severity and normalized message) |
 | triage | opus, medium, only on what is new | groups whose log signature a known issue remembered are folded out first (`triage/known-groups.json`) and listed as recurrences; the session classifies the rest from `triage/digest.md`, and is skipped when nothing is new. Writes `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
 | context | none (`gcloud logging read`, every severity, INFO included) | `triage/issues/<issue>.context.md` + `.json`: the entries from the same pods or traces as the issue's samples, from `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` before the first sample to `PROD_MONITOR_CONTEXT_AFTER_MINUTES` after the last, oldest first, up to `PROD_MONITOR_CONTEXT_LIMIT` |
-| findings | opus, high, one session per issue, in parallel | `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
+| findings | opus, high, one session per issue, in parallel | first a sonnet duplicate check against known issues that appeared after this run's triage (another run's tickets, a retry); a match becomes a recurrence instead of an investigation. Then `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
 | challenge | opus, high, one session per finding | `challenged-findings/<issue>.md` + `.json`: confirmed, partially_confirmed or rejected, with corrections |
-| tickets | sonnet relay, one Linear `save_issue` per confirmed or partially confirmed finding | `tickets/<issue>.json`; `<workdir>/known-issues.json` remembers the fingerprint and ticket |
+| tickets | sonnet relay, one Linear `save_issue` per confirmed or partially confirmed finding | the same duplicate check once more for the findings about to be ticketed; `tickets/<issue>.json`; `<workdir>/known-issues.json` remembers the fingerprint and ticket |
 | prs (opt-in) | opus, medium | `prs/<issue>.json`: a draft PR from a worktree under `<workdir>/worktrees` |
 | report | none | `<workdir>/tickets/<dd-MM-yyyy>/<run>.md` and `report.md`: tickets created, issues investigated without a ticket, recurrences, noise |
 
@@ -136,7 +136,11 @@ normalized message) of its digest groups. On the next run those groups are folde
 before triage, so the model only sees new lines, and the issue is listed as a
 recurrence with its ticket; a known issue the model recognizes by fingerprint is
 skipped the same way, and its new signatures are remembered too. Rejected, inconclusive and failed issues are left alone for
-`PROD_MONITOR_SKIP_TTL_HOURS`.
+`PROD_MONITOR_SKIP_TTL_HOURS`. Known issues that appear after a run's triage (another
+run's tickets, a retried ticket) are checked by a sonnet session before the run
+investigates and again before it tickets: an issue judged the same problem is counted as
+a recurrence of that ticket, its signatures are remembered under it, and no second ticket
+is created (`triage/dedupe-<stage>.json` keeps the answer).
 
 Every session's event stream is kept in `<run>/sessions/<stage>.log`. Everything the
 loop does is appended to `<workdir>/logs/<dd-MM-yyyy>.txt`, one file per day, never

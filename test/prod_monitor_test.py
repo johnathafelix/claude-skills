@@ -422,6 +422,7 @@ class FakeSessions:
         self.worker_actionable = False
         self.bug_exists = True
         self.label_tools = None
+        self.duplicates = {}
 
     def __call__(self, config, *, event_log, prompt, writable=(), **kwargs):
         name = event_log.stem
@@ -462,6 +463,8 @@ class FakeSessions:
             ]}
         elif stage == 'linear':
             structured = {'status': self.linear_status, 'detail': '', 'identifier': 'ENG-123', 'url': 'https://linear.app/eng/issue/ENG-123'}
+        elif stage == 'dedupe':
+            structured = {'duplicates': [{'issue': issue, 'ticket': ticket, 'reason': 'same failure'} for issue, ticket in self.duplicates.items()]}
         elif stage == 'pr':
             structured = {'status': 'ok', 'detail': '', 'url': 'https://github.com/o/api/pull/9', 'branch': 'fix/api-nil-deref'}
         else:
@@ -577,6 +580,7 @@ class Pipeline(unittest.TestCase):
         self.assertIn('labels: ["lbl-1", "lbl-2"]  (label IDs, already verified to exist: prod-monitor, Bug', linear_prompt)
         self.assertEqual(common.read_json(self.work / 'linear-labels.json'), {'team': 'ENG', 'resolved': {'prod-monitor': {'name': 'prod-monitor', 'id': 'lbl-1'}, 'bug': {'name': 'Bug', 'id': 'lbl-2'}}})
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'labels'), 1)
+        self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('dedupe-')), 0)
         self.assertIn('title: [api] nil deref in order handler', linear_prompt)
         self.assertIn('priority: 2', linear_prompt)
         self.assertIn('add check and test', linear_prompt)
@@ -758,6 +762,60 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json'), {'status': 'skipped', 'reason': 'already ticketed as ENG-7'})
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'linear-api-nil-deref'), 1)
         self.assertEqual(run.alerts, [])
+
+    def ticketed_elsewhere(self):
+        """A ticket another run created for the same problem, under its own fingerprint, after this run's triage."""
+        entry = {'status': 'ticketed', 'ticket': 'ENG-7', 'url': 'https://linear.app/eng/issue/ENG-7', 'title': 'order handler nil pointer', 'service': 'api', 'issue_id': 'nil-ptr', 'recurrences': 0, 'run': 'other', 'signatures': ['x'], 'at': common.iso(self.now), 'last_seen': common.iso(self.now)}
+        common.write_json_atomic(self.work / 'known-issues.json', {'api:nil-deref:other-wording': entry})
+
+    def test_a_ticket_created_after_triage_stops_the_duplicate_before_investigation(self):
+        path, fake = self.start(fail=('finding-api-nil-deref',))
+        pipeline.process(self.config, path)
+        self.assertFalse(common.is_done(path, 'findings'))
+        self.ticketed_elsewhere()
+        fake.duplicates = {'api-nil-deref': 'ENG-7'}
+
+        run = pipeline.process(self.config, path)
+        prompt = [c for c in fake.calls if c[0] == 'dedupe-findings'][0][3]
+        self.assertIn('"title": "nil deref in order handler"', prompt)
+        self.assertIn('"ticket": "ENG-7"', prompt)
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'finding-api-nil-deref'), 1)
+        self.assertEqual(run.plan()['api-nil-deref'], {'action': 'known', 'ticket': 'ENG-7', 'status': 'ticketed', 'fingerprint': 'api:nil-deref:other-wording'})
+        self.assertFalse((path / 'tickets' / 'api-nil-deref.json').exists())
+        self.assertTrue(common.is_done(path, 'run'))
+        entry = common.read_json(self.work / 'known-issues.json')['api:nil-deref:other-wording']
+        self.assertEqual((entry['recurrences'], entry['run'], len(entry['signatures'])), (1, run.id, 2))
+        self.assertIn('ENG-7 — nil deref in order handler', (path / 'report.md').read_text())
+        self.assertEqual(run.alerts, [])
+        log = (self.work / 'logs' / '20-10-2026.txt').read_text()
+        self.assertIn('findings api-nil-deref: same problem as ENG-7 (order handler nil pointer), not investigated', log)
+
+    def test_a_ticket_created_during_investigation_is_not_duplicated(self):
+        path, fake = self.start(fail=('linear-api-nil-deref',))
+        pipeline.process(self.config, path)
+        self.assertFalse(common.is_done(path, 'tickets'))
+        self.ticketed_elsewhere()
+        fake.duplicates = {'api-nil-deref': 'ENG-7'}
+
+        run = pipeline.process(self.config, path)
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'linear-api-nil-deref'), 1)
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'dedupe-tickets'), 1)
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json'), {'status': 'skipped', 'reason': 'same problem as ENG-7: order handler nil pointer'})
+        self.assertEqual(common.read_json(self.work / 'known-issues.json')['api:nil-deref:other-wording']['recurrences'], 1)
+        self.assertIn('same problem as ENG-7', (path / 'report.md').read_text())
+        self.assertEqual(run.alerts, [])
+
+    def test_a_failed_duplicate_check_is_noted_once_and_skipped(self):
+        path, fake = self.start(fail=('finding-api-nil-deref',))
+        pipeline.process(self.config, path)
+        self.ticketed_elsewhere()
+        fake.fail.add('dedupe-findings')
+
+        pipeline.process(self.config, path)
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'dedupe-findings'), 1)
+        self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json')['identifier'], 'ENG-123')
+        log = (self.work / 'logs' / '20-10-2026.txt').read_text()
+        self.assertEqual(log.count('findings: duplicate check failed, proceeding without it: boom'), 1)
 
     def test_without_labels_no_lookup_runs_and_the_field_is_left_out(self):
         config = common.load_config({**self.env, 'PROD_MONITOR_LINEAR_LABELS': ''})
