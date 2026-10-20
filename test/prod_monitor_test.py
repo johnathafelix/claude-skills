@@ -184,6 +184,9 @@ class Digest(unittest.TestCase):
         self.assertEqual(gcp.message_of(ENTRIES[3]), 'timeout calling 10.0.0.1:8080 req 7f3a9c2b1d4e')
         self.assertEqual(gcp.service_of(ENTRIES[3]), 'checkout')
         self.assertEqual(gcp.service_of(ENTRIES[0]), 'api')
+        labelled = {**ENTRIES[0], 'labels': {'k8s-pod/app_kubernetes_io/instance': 'commerce-user-api', 'k8s-pod/product': 'commerce'}, 'resource': {'labels': {'namespace_name': 'storefront', 'container_name': 'platform-app'}}}
+        self.assertEqual(gcp.service_of(labelled), 'commerce-user-api')
+        self.assertEqual(gcp.service_of({'labels': {'k8s-pod/product': 'commerce'}}), 'commerce')
         self.assertEqual(gcp.message_of({'jsonPayload': {'error': {'message': 'nested'}}}), 'nested')
         self.assertEqual(gcp.message_of({}), '(no message)')
 
@@ -336,6 +339,22 @@ class Issues(unittest.TestCase):
         self.assertEqual((issues[0]['service'], issues[0]['namespace'], issues[0]['count'], issues[0]['digest_groups']), ('api', 'payments', 2, ['g1']))
         self.assertEqual((issues[1]['severity'], issues[1]['fingerprint'], issues[1]['actionable'], issues[1]['known_ticket']), ('warning', 'worker:another', False, 'ENG-9'))
 
+    def test_fold_known_groups_by_signature_and_activity(self):
+        now = 1_000_000.0
+        key = pipeline.group_key(self.summary['groups'][0])
+        self.assertEqual(key, 'payments|api|nil pointer dereference in handler order=#')
+        known = {
+            'api:a': {'status': 'ticketed', 'ticket': 'ENG-1', 'signatures': [key]},
+            'old:b': {'status': 'skipped:rejected', 'at': common.iso(now - 90000), 'signatures': [pipeline.group_key(self.summary['groups'][1])]},
+        }
+        fresh, folded = pipeline.fold_known_groups(self.summary, known, now, 86400)
+        self.assertEqual(folded, {'api:a': ['g1']})
+        self.assertEqual([g['id'] for g in fresh], ['g2', 'g3'])
+        sub = pipeline.subset(self.summary, fresh)
+        self.assertEqual((sub['total'], sub['by_severity']), (2, {'ERROR': 1, 'WARNING': 1}))
+        issue = pipeline.known_issue('api:a', known['api:a'], ['g1'], {g['id']: g for g in self.summary['groups']})
+        self.assertEqual((issue['id'], issue['severity'], issue['count'], issue['known_ticket']), ('api-a', 'error', 2, 'ENG-1'))
+
     def test_plan_skips_known_and_recently_skipped(self):
         now = 1_000_000.0
         known = {
@@ -363,7 +382,9 @@ class FakeSessions:
         self.run_dir = run_dir
         self.fail = set(fail)
         self.calls = []
+        self.digests = []
         self.linear_status = 'ok'
+        self.worker_actionable = False
 
     def __call__(self, config, *, event_log, prompt, writable=(), **kwargs):
         name = event_log.stem
@@ -377,11 +398,14 @@ class FakeSessions:
         usage = {'turn_tokens': 1, 'session_tokens': 2}
         if stage == 'triage':
             (self.run_dir / 'triage' / 'triage.md').write_text('# Triage\n\nwritten by model\n')
-            structured = {'issues': [
+            shown = (self.run_dir / 'triage' / 'digest.md').read_text()
+            self.digests.append(shown)
+            canned = [
                 {'id': 'api-nil-deref', 'title': 'nil deref in order handler', 'service': 'api', 'namespace': 'payments', 'severity': 'error', 'fingerprint': 'api:nil-deref:handler', 'digest_groups': ['g1'], 'summary': 'crashes', 'actionable': True, 'known_ticket': ''},
                 {'id': 'checkout-timeout', 'title': 'checkout timeouts', 'service': 'checkout', 'namespace': 'payments', 'severity': 'error', 'fingerprint': 'checkout:timeout:upstream', 'digest_groups': ['g2'], 'summary': 'slow', 'actionable': True, 'known_ticket': ''},
-                {'id': 'worker-retry', 'title': 'worker retries', 'service': 'worker', 'namespace': 'payments', 'severity': 'warning', 'fingerprint': 'worker:retry', 'digest_groups': ['g3'], 'summary': 'noise', 'actionable': False, 'known_ticket': ''},
-            ], 'notes': 'ok'}
+                {'id': 'worker-retry', 'title': 'worker retries', 'service': 'worker', 'namespace': 'payments', 'severity': 'warning', 'fingerprint': 'worker:retry', 'digest_groups': ['g3'], 'summary': 'noise', 'actionable': self.worker_actionable, 'known_ticket': ''},
+            ]
+            structured = {'issues': [issue for issue in canned if f"### {issue['digest_groups'][0]} " in shown], 'notes': 'ok'}
         elif stage == 'finding':
             issue = name[len('finding-'):]
             if issue == 'api-nil-deref':
@@ -474,6 +498,10 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(known['api:nil-deref:handler']['ticket'], 'ENG-123')
         self.assertEqual(known['checkout:timeout:upstream']['status'], 'skipped:rejected')
         self.assertNotIn('worker:retry', known)
+        self.assertEqual(known['api:nil-deref:handler']['signatures'], ['payments|api|nil pointer dereference in handler order=#'])
+        self.assertEqual(known['api:nil-deref:handler']['issue_id'], 'api-nil-deref')
+        self.assertEqual(common.read_json(path / 'triage' / 'known-groups.json'), {})
+        self.assertIn('### g1 ', fake.digests[0])
 
         report = self.work / 'tickets' / '20-10-2026' / '20-10-2026-14-00.md'
         text = report.read_text()
@@ -485,7 +513,8 @@ class Pipeline(unittest.TestCase):
         log = (self.work / 'logs' / '20-10-2026.txt').read_text()
         self.assertIn('fetch: 4 entries in 3 groups', log)
         self.assertIn('context api-nil-deref: 2 entries for 2026-10-20T09:55:01Z..2026-10-20T10:01:06Z', log)
-        self.assertIn('triage: 3 issues (2 errors, 1 warnings); 2 to investigate, 0 known, 1 not actionable', log)
+        self.assertIn('triage: 3 new issues (2 errors, 1 warnings) from 3 groups; 0 known issues folded (0 entries)', log)
+        self.assertIn('plan: 2 to investigate, 0 known, 1 not actionable', log)
         self.assertIn('ticket api-nil-deref: ENG-123', log)
         self.assertIn('run complete', log)
         self.assertEqual(len(run.alerts), 1)
@@ -520,11 +549,41 @@ class Pipeline(unittest.TestCase):
         plan = common.read_json(later / 'triage' / 'plan.json')
         self.assertEqual(plan['api-nil-deref'], {'action': 'known', 'ticket': 'ENG-123', 'status': 'ticketed'})
         self.assertEqual(plan['checkout-timeout']['action'], 'known')
+        self.assertEqual(plan['worker-retry'], {'action': 'ignore'})
+        shown = fake.digests[-1]
+        self.assertIn('### g3 ', shown)
+        self.assertNotIn('### g1 ', shown)
+        self.assertNotIn('### g2 ', shown)
+        self.assertIn('Groups already attributed to known issues (2 groups, 3 entries) were removed', shown)
+        folded = common.read_json(later / 'triage' / 'known-groups.json')
+        self.assertEqual(folded['api:nil-deref:handler']['groups'], ['g1'])
+        self.assertEqual(folded['api:nil-deref:handler']['ticket'], 'ENG-123')
+        synthesized = common.read_json(later / 'triage' / 'issues' / 'api-nil-deref.json')
+        self.assertEqual((synthesized['severity'], synthesized['count'], synthesized['known_ticket'], len(synthesized['sample_entries'])), ('error', 2, 'ENG-123', 2))
+        self.assertIn('1 new issues (0 errors, 1 warnings) from 1 groups; 2 known issues folded (3 entries)', (self.work / 'logs' / '20-10-2026.txt').read_text())
         self.assertEqual([c[0] for c in fake.calls if c[0] != 'triage' and 'later' not in c[0]][-1:], ['linear-api-nil-deref'])
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'triage'), 2)
         known = common.read_json(self.work / 'known-issues.json')
         self.assertEqual(known['api:nil-deref:handler']['recurrences'], 1)
         self.assertEqual(run.alerts, [])
+        self.assertIn('- ENG-123 — nil deref in order handler (2 occurrences)', (later / 'report.md').read_text())
+
+    def test_no_triage_session_when_every_group_is_known(self):
+        path, fake = self.start()
+        fake.worker_actionable = True
+        pipeline.process(self.config, path)
+        self.assertEqual(sorted(common.read_json(self.work / 'known-issues.json')), ['api:nil-deref:handler', 'checkout:timeout:upstream', 'worker:retry'])
+
+        later = pipeline.create_run(self.config, self.now + 3600)
+        fake.run_dir = later
+        run = pipeline.process(self.config, later)
+        self.assertTrue(common.is_done(later, 'run'))
+        self.assertEqual(sum(1 for c in fake.calls if c[0] == 'triage'), 1)
+        self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('finding-')), 3)
+        self.assertIn('Every group in this window belongs to a known issue', (later / 'triage' / 'triage.md').read_text())
+        self.assertIn('triage: all 3 groups (4 entries) belong to 3 known issues, no session', run.notes)
+        self.assertEqual({k: v['action'] for k, v in common.read_json(later / 'triage' / 'plan.json').items()}, {'api-nil-deref': 'known', 'checkout-timeout': 'known', 'worker-retry': 'known'})
+        self.assertEqual(common.read_json(self.work / 'known-issues.json')['worker:retry']['recurrences'], 1)
         self.assertIn('- ENG-123 — nil deref in order handler (2 occurrences)', (later / 'report.md').read_text())
 
     def test_failed_session_is_retried_next_tick_and_resumes_where_it_stopped(self):

@@ -2,7 +2,8 @@
 """The stages of one prod-monitor run, each resumable from its markers.
 
     fetch      gcloud logging read for the run's window -> gcp-logs/ (no model)
-    triage     one opus session classifies the digest -> triage/
+    triage     digest groups whose signature belongs to a known issue are folded out, then
+               one opus session classifies what is left -> triage/ (no session when nothing is new)
     context    gcloud logging read, all severities around each issue's samples -> triage/issues/ (no model)
     findings   one opus session per actionable, unknown issue -> findings/
     challenge  one opus session per finding, high effort -> challenged-findings/
@@ -237,6 +238,93 @@ def normalize_issues(structured, summary):
     return issues
 
 
+def group_key(group):
+    return f"{group['namespace']}|{group['service']}|{group['signature']}"
+
+
+def is_active(entry, now, ttl):
+    """A known entry still worth skipping: ticketed, or skipped less than `ttl` seconds ago."""
+    if entry.get("status") == "ticketed":
+        return True
+
+    try:
+        return now - from_iso(entry.get("at", "")) < ttl
+    except ValueError:
+        return False
+
+
+def fold_known_groups(summary, known, now, ttl):
+    """(fresh groups, {fingerprint: [group ids]}): groups whose signature an active known
+    issue remembered are attributed to it before any model sees the digest."""
+    signatures = {}
+    for fingerprint, entry in sorted(known.items()):
+        if is_active(entry, now, ttl):
+            for signature in entry.get("signatures") or []:
+                signatures.setdefault(signature, fingerprint)
+
+    fresh = []
+    folded = {}
+    for group in summary.get("groups") or []:
+        fingerprint = signatures.get(group_key(group))
+        if fingerprint:
+            folded.setdefault(fingerprint, []).append(group["id"])
+        else:
+            fresh.append(group)
+
+    return fresh, folded
+
+
+def subset(summary, groups):
+    by_severity = {}
+    by_service = {}
+    for group in groups:
+        by_severity[group["severity"]] = by_severity.get(group["severity"], 0) + group["count"]
+        service = f"{group['namespace']}/{group['service']}"
+        by_service[service] = by_service.get(service, 0) + group["count"]
+
+    return {"total": sum(group["count"] for group in groups), "groups": groups, "by_severity": by_severity, "by_service": by_service}
+
+
+def known_issue(fingerprint, entry, group_ids, groups):
+    """An issue record for groups folded into a known issue, so plans, reports and recurrence counts see it."""
+    first = groups[group_ids[0]]
+    severe = any(gcp.severity_rank(groups[g]["severity"]) >= gcp.severity_rank("ERROR") for g in group_ids)
+
+    return {
+        "id": entry.get("issue_id") or slug(fingerprint),
+        "title": entry.get("title") or fingerprint,
+        "service": entry.get("service") or first["service"],
+        "namespace": first["namespace"],
+        "severity": "error" if severe else "warning",
+        "fingerprint": fingerprint,
+        "count": sum(groups[g]["count"] for g in group_ids),
+        "digest_groups": group_ids,
+        "summary": f"Recurrence of a known issue, matched by log signature ({entry.get('status', '')}, {entry.get('ticket') or 'no ticket'}).",
+        "actionable": True,
+        "known_ticket": entry.get("ticket", ""),
+    }
+
+
+def unique_ids(issues):
+    seen = set()
+    for issue in issues:
+        base = issue["id"]
+        suffix = 2
+        while issue["id"] in seen:
+            issue["id"] = f"{base}-{suffix}"
+            suffix += 1
+
+        seen.add(issue["id"])
+
+    return issues
+
+
+def signatures_of(run, issue):
+    groups = {group["id"]: group for group in (read_json(run.file("gcp-logs", "digest.json")) or {}).get("groups") or []}
+
+    return sorted({group_key(groups[g]) for g in issue.get("digest_groups") or [] if g in groups})
+
+
 def known_entry(known, issue, now, ttl):
     """The known-issues entry that makes this issue skippable: a ticketed one, or one
     skipped (rejected, inconclusive, failed) less than `ttl` seconds ago."""
@@ -244,16 +332,10 @@ def known_entry(known, issue, now, ttl):
     if entry is None and issue["known_ticket"]:
         entry = next((e for e in known.values() if e.get("ticket") == issue["known_ticket"]), None)
 
-    if entry is None:
+    if entry is None or not is_active(entry, now, ttl):
         return None
 
-    if entry.get("status") == "ticketed":
-        return entry
-
-    try:
-        return entry if now - from_iso(entry.get("at", "")) < ttl else None
-    except ValueError:
-        return None
+    return entry
 
 
 def plan_issues(issues, known, now, ttl):
@@ -288,6 +370,7 @@ def stage_triage(run):
     if summary is None:
         raise StageError("gcp-logs/digest.json is missing")
 
+    now = time.time()
     known = run.known()
     known_for_prompt = [
         {"fingerprint": fingerprint, "title": entry.get("title", ""), "ticket": entry.get("ticket", ""), "status": entry.get("status", "")}
@@ -295,54 +378,71 @@ def stage_triage(run):
     ]
     write_json_atomic(run.file("triage", "known-issues.json"), known_for_prompt)
 
+    groups = {group["id"]: group for group in summary.get("groups") or []}
+    fresh, folded = fold_known_groups(summary, known, now, run.config["reject_ttl"])
+    write_json_atomic(run.file("triage", "known-groups.json"), {
+        fingerprint: {"groups": ids, "count": sum(groups[g]["count"] for g in ids), "ticket": known[fingerprint].get("ticket", ""), "title": known[fingerprint].get("title", "")}
+        for fingerprint, ids in folded.items()
+    })
+    known_issues = [known_issue(fingerprint, known[fingerprint], ids, groups) for fingerprint, ids in folded.items()]
+    folded_count = sum(issue["count"] for issue in known_issues)
+
     if summary["total"] == 0:
         write_text_atomic(run.file("triage", "triage.md"), "# Triage\n\nNo log entries at or above the configured severity in this window.\n")
-        write_json_atomic(run.file("triage", "issues.json"), {"issues": [], "notes": "no entries"})
-        write_json_atomic(run.file("triage", "plan.json"), {})
+        issues, notes = [], "no entries"
         run.note("triage: no entries, nothing to classify")
+    elif not fresh:
+        write_text_atomic(run.file("triage", "triage.md"), "# Triage\n\nEvery group in this window belongs to a known issue (see known-groups.json); no triage session was needed.\n\n"
+                          + "\n".join(f"- {issue['fingerprint']}: {issue['count']} entries, {issue['known_ticket'] or 'no ticket'}" for issue in known_issues) + "\n")
+        issues, notes = known_issues, "all groups known"
+        run.note(f"triage: all {len(groups)} groups ({folded_count} entries) belong to {len(known_issues)} known issues, no session")
+    else:
+        window = read_json(run.file("gcp-logs", "window.json")) or {}
+        fresh_summary = subset(summary, fresh)
+        header = f"Groups already attributed to known issues ({len(groups) - len(fresh)} groups, {folded_count} entries) were removed; see known-groups.json.\n\n" if folded else ""
+        write_text_atomic(run.file("triage", "digest.md"), header + gcp.render_digest(window, fresh_summary, summary["total"] >= run.config["log_limit"]))
+        prompt = render_prompt(
+            "triage",
+            run_dir=run.path,
+            digest_file=run.file("triage", "digest.md"),
+            window_start=window.get("start", ""),
+            window_end=window.get("end", ""),
+            namespaces=", ".join(run.config["namespaces"]),
+        )
+        reply = run.session(
+            "triage",
+            model=run.config["triage_model"],
+            effort=run.config["triage_effort"],
+            prompt=prompt,
+            cwd=run.path,
+            schema=TRIAGE_SCHEMA,
+            tools=INVESTIGATE_TOOLS,
+            add_dirs=(run.workdir,),
+            writable=(run.file("triage"),),
+        )
+        if reply["status"] != "ok":
+            raise StageError(f"triage session: {reply['detail']}")
 
-        return True
+        folded_fingerprints = set(folded)
+        model_issues = [issue for issue in normalize_issues(reply["structured"], fresh_summary) if issue["fingerprint"] not in folded_fingerprints]
+        issues = unique_ids(known_issues + model_issues)
+        notes = str(reply["structured"].get("notes") or "")
+        if not run.file("triage", "triage.md").exists():
+            write_text_atomic(run.file("triage", "triage.md"), fallback_triage(issues, notes))
 
-    window = read_json(run.file("gcp-logs", "window.json")) or {}
-    prompt = render_prompt(
-        "triage",
-        run_dir=run.path,
-        window_start=window.get("start", ""),
-        window_end=window.get("end", ""),
-        namespaces=", ".join(run.config["namespaces"]),
-    )
-    reply = run.session(
-        "triage",
-        model=run.config["triage_model"],
-        effort=run.config["triage_effort"],
-        prompt=prompt,
-        cwd=run.path,
-        schema=TRIAGE_SCHEMA,
-        tools=INVESTIGATE_TOOLS,
-        add_dirs=(run.workdir,),
-        writable=(run.file("triage"),),
-    )
-    if reply["status"] != "ok":
-        raise StageError(f"triage session: {reply['detail']}")
-
-    issues = normalize_issues(reply["structured"], summary)
-    notes = str(reply["structured"].get("notes") or "")
-    if not run.file("triage", "triage.md").exists():
-        write_text_atomic(run.file("triage", "triage.md"), fallback_triage(issues, notes))
+        errors = sum(1 for issue in model_issues if issue["severity"] == "error")
+        run.note(f"triage: {len(model_issues)} new issues ({errors} errors, {len(model_issues) - errors} warnings) from {len(fresh)} groups; {len(known_issues)} known issues folded ({folded_count} entries) ({session.usage_note(reply)})")
 
     logs = read_json(run.file("gcp-logs", "logs.json")) or []
-    groups = {group["id"]: group for group in summary["groups"]}
     for issue in issues:
         indexes = [index for group_id in issue["digest_groups"] for index in groups[group_id]["entries"]]
         write_json_atomic(run.file("triage", "issues", f"{issue['id']}.json"), {**issue, "sample_entries": [logs[index] for index in indexes if index < len(logs)]})
 
-    plan = plan_issues(issues, known, time.time(), run.config["reject_ttl"])
+    plan = plan_issues(issues, known, now, run.config["reject_ttl"])
     write_json_atomic(run.file("triage", "issues.json"), {"issues": issues, "notes": notes})
     write_json_atomic(run.file("triage", "plan.json"), plan)
-
     counts = {action: sum(1 for p in plan.values() if p["action"] == action) for action in ("investigate", "known", "ignore")}
-    errors = sum(1 for issue in issues if issue["severity"] == "error")
-    run.note(f"triage: {len(issues)} issues ({errors} errors, {len(issues) - errors} warnings); {counts['investigate']} to investigate, {counts['known']} known, {counts['ignore']} not actionable ({session.usage_note(reply)})")
+    run.note(f"plan: {counts['investigate']} to investigate, {counts['known']} known, {counts['ignore']} not actionable")
 
     return True
 
@@ -605,9 +705,11 @@ def remember(run, issue, status, ticket=None, now=None):
         "status": status,
         "title": issue["title"],
         "service": issue["service"],
+        "issue_id": issue["id"],
         "at": iso(now or time.time()),
         "last_seen": iso(now or time.time()),
         "run": run.id,
+        "signatures": sorted(set(entry.get("signatures") or []) | set(signatures_of(run, issue))),
     })
     if ticket:
         entry.update({"ticket": ticket.get("identifier", ""), "url": ticket.get("url", "")})
@@ -629,6 +731,7 @@ def stage_tickets(run):
                 entry["recurrences"] = entry.get("recurrences", 0) + 1
                 entry["last_seen"] = iso(now)
                 entry["run"] = run.id
+                entry["signatures"] = sorted(set(entry.get("signatures") or []) | set(signatures_of(run, issue)))
                 run.save_known(known)
 
             continue

@@ -112,7 +112,7 @@ redoes only what has no result yet:
 | Stage | Model | Output |
 |---|---|---|
 | fetch | none (`gcloud logging read`, severity ≥ WARNING, the namespaces) | `gcp-logs/logs.json`, `digest.md` (deterministic grouping by service, severity and normalized message) |
-| triage | opus, medium | `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
+| triage | opus, medium, only on what is new | groups whose log signature a known issue remembered are folded out first (`triage/known-groups.json`) and listed as recurrences; the session classifies the rest from `triage/digest.md`, and is skipped when nothing is new. Writes `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
 | context | none (`gcloud logging read`, every severity, INFO included) | `triage/issues/<issue>.context.md` + `.json`: the entries from the same pods or traces as the issue's samples, from `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` before the first sample to `PROD_MONITOR_CONTEXT_AFTER_MINUTES` after the last, oldest first, up to `PROD_MONITOR_CONTEXT_LIMIT` |
 | findings | opus, high, one session per issue, in parallel | `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
 | challenge | opus, high, one session per finding | `challenged-findings/<issue>.md` + `.json`: confirmed, partially_confirmed or rejected, with corrections |
@@ -122,9 +122,12 @@ redoes only what has no result yet:
 
 A failed session is retried on the next tick, three times; then the issue is recorded as
 failed and the run goes on. A fetch that fails three times stops the loop (exit 2)
-because `gcloud` itself needs the user. Issues whose fingerprint already has a ticket
-are not investigated again; their recurrence is counted in `known-issues.json` and
-listed in the report. Rejected, inconclusive and failed issues are left alone for
+because `gcloud` itself needs the user. `<workdir>/known-issues.json` remembers every ticketed or
+skipped issue with its fingerprint and the log signatures (namespace, service,
+normalized message) of its digest groups. On the next run those groups are folded out
+before triage, so the model only sees new lines, and the issue is listed as a
+recurrence with its ticket; a known issue the model recognizes by fingerprint is
+skipped the same way, and its new signatures are remembered too. Rejected, inconclusive and failed issues are left alone for
 `PROD_MONITOR_SKIP_TTL_HOURS`.
 
 Every session's event stream is kept in `<run>/sessions/<stage>.log`. Everything the

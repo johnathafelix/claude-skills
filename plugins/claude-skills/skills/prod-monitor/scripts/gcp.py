@@ -182,15 +182,20 @@ def message_of(entry):
 
 
 def service_of(entry):
+    """The service name: the Helm release / app labels first, since the container is often a
+    generic name (platform-app) shared by every service of a chart."""
     resource = (entry.get("resource") or {}).get("labels") or {}
     labels = entry.get("labels") or {}
+    for key in ("k8s-pod/app_kubernetes_io/instance", "k8s-pod/app", "k8s-pod/app_kubernetes_io/name"):
+        if labels.get(key):
+            return labels[key]
+
     for key in ("container_name", "service_name"):
         if resource.get(key):
             return resource[key]
 
-    for key in ("k8s-pod/app", "k8s-pod/app_kubernetes_io/name", "k8s-pod/product"):
-        if labels.get(key):
-            return labels[key]
+    if labels.get("k8s-pod/product"):
+        return labels["k8s-pod/product"]
 
     pod = resource.get("pod_name")
     if pod:
