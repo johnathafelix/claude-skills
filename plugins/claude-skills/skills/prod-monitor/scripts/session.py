@@ -35,9 +35,11 @@ def usage_note(reply):
     return f"{usage.get('session_tokens', 0)} tokens"
 
 
-def command(config, model, effort, schema, tools, allowed_tools, add_dirs, plugin, system_prompt, slash_commands):
+def command(config, model, effort, prompt, schema, tools, allowed_tools, add_dirs, plugin, system_prompt, slash_commands):
+    # The prompt comes right after -p: --tools, --allowedTools and --add-dir take a
+    # variable number of values and would swallow a prompt placed after them.
     argv = [
-        "claude", "-p", "--model", model,
+        "claude", "-p", prompt, "--model", model,
         "--permission-mode", "auto", "--permission-prompts", "none",
         "--setting-sources", "user",
         "--settings", json.dumps({"autoMemoryEnabled": False, "disableAllHooks": not plugin}),
@@ -69,7 +71,7 @@ def command(config, model, effort, schema, tools, allowed_tools, add_dirs, plugi
 
 
 def run(config, *, model, effort, prompt, cwd, schema, event_log, tools=(), allowed_tools=(), add_dirs=(), writable=(), plugin=True, system_prompt="", slash_commands=False, timeout=None):
-    argv = command(config, model, effort, schema, tools, allowed_tools, add_dirs, plugin, system_prompt, slash_commands)
+    argv = command(config, model, effort, prompt, schema, tools, allowed_tools, add_dirs, plugin, system_prompt, slash_commands)
     env = {
         **os.environ,
         "PROD_MONITOR_GUARD": "1",
@@ -81,7 +83,7 @@ def run(config, *, model, effort, prompt, cwd, schema, event_log, tools=(), allo
     try:
         with event_log.open("w") as log:
             session = subprocess.run(
-                [*argv, prompt],
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=log,
                 text=True,

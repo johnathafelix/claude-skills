@@ -288,7 +288,7 @@ class FakeTools(unittest.TestCase):
         self.assertEqual(reply['structured']['identifier'], 'ENG-1')
         self.assertEqual(reply['usage']['session_tokens'], 15)
         argv = (self.root / 'claude-argv').read_text().splitlines()
-        self.assertEqual(argv[-1], 'hello')
+        self.assertEqual(argv[:2], ['-p', 'hello'])
         self.assertIn('--json-schema', argv)
         self.assertNotIn('--no-session-persistence', argv)
         self.assertIn('--disable-slash-commands', argv)
