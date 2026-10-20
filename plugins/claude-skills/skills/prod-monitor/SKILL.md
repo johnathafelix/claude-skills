@@ -1,0 +1,136 @@
+---
+name: prod-monitor
+description: "Watch production logs on GCP on a schedule: fetch the watched namespaces' warnings and errors, triage them with opus, find the probable root cause and a fix per issue in the source code (read-only, kubectl inspection allowed), challenge every finding independently, then open Linear tickets assigned to the user. Resumable, journaled under a workdir, production kept read-only by a hook. Invoke once to start the session's background watch."
+argument-hint: ""
+---
+
+# Prod monitor
+
+Starts the watch: a background Python loop that every interval reads the last window of
+Cloud Logging entries for the configured namespaces and turns the issues in them into
+Linear tickets, each with a probable root cause, a proposed fix and an independent
+challenge of both. Invoke it once:
+
+```
+/claude-skills:prod-monitor
+```
+
+The loop runs outside this session: Python for the schedule, the log fetch and the
+bookkeeping; one headless Claude Code session per model step. This session hears from
+the loop only when it exits.
+
+**This skill creates Linear tickets without asking.** Starting the loop is the user's
+approval to create tickets in the configured team and project, assigned to them. It
+never changes production: every session it starts runs with the `prod-guard` hook
+active, which denies mutating `kubectl`, `gcloud`, `helm`, `gsutil` and infrastructure
+commands, destructive `git` commands, and any file write outside the run's own
+directories. With `PROD_MONITOR_OPEN_PRS=1` it also pushes fix branches and opens
+draft PRs for confirmed findings; that is off by default.
+
+## Setup (once, by the user)
+
+All values go in the `env` block of `~/.claude/settings.json`. Never write them into
+this repo.
+
+Required:
+
+- `PROD_MONITOR_GCP_PROJECT`: the GCP project whose logs are read.
+- `PROD_MONITOR_NAMESPACES`: comma-separated Kubernetes namespaces the user is
+  responsible for; only their entries are read (`resource.labels.namespace_name`).
+- `PROD_MONITOR_REPOS_DIR`: the directory holding every repository checked out. The
+  agents read code from detached worktrees under `<workdir>/worktrees`, never from
+  these working copies.
+- `PROD_MONITOR_LINEAR_TEAM` and `PROD_MONITOR_LINEAR_PROJECT`: where tickets go,
+  by name (as the Linear connector resolves them).
+- `PROD_MONITOR_LINEAR_LABELS`: comma-separated label names put on every ticket.
+- `PROD_MONITOR_WORKDIR`: where runs, logs, reports and worktrees are stored.
+
+Optional:
+
+- `PROD_MONITOR_INTERVAL`: `30m`, `1h`, `2h`, ... Default `1h`.
+- `PROD_MONITOR_MIN_SEVERITY` (default `WARNING`), `PROD_MONITOR_EXTRA_FILTER` (a
+  Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000,
+  the newest entries are kept when a window has more).
+- `PROD_MONITOR_MAX_PARALLEL` (default 4 sessions at once),
+  `PROD_MONITOR_SESSION_TIMEOUT_SECONDS` (default 1800),
+  `PROD_MONITOR_SKIP_TTL_HOURS` (default 24: how long a rejected, inconclusive or
+  failed issue is left alone before it is investigated again).
+- Models and efforts: `PROD_MONITOR_TRIAGE_MODEL`/`_EFFORT` (opus, medium),
+  `PROD_MONITOR_FINDINGS_MODEL`/`_EFFORT` (opus, high),
+  `PROD_MONITOR_CHALLENGE_MODEL`/`_EFFORT` (opus, high),
+  `PROD_MONITOR_LINEAR_MODEL` (sonnet), `PROD_MONITOR_PR_MODEL`/`_EFFORT` (opus,
+  medium).
+- `PROD_MONITOR_OPEN_PRS=1`: also open a draft PR per confirmed ticket.
+
+Also needed: the Google Cloud SDK (`gcloud`) logged in with access to the project's
+logs, `kubectl` with a context that can read the namespaces (for pod inspection), the
+Linear connector connected in Claude Code (`/mcp`), and the plugin up to date.
+
+## Step 1 — Start the loop
+
+Run with `Bash`, `run_in_background: true`:
+
+```bash
+python3 "<absolute dir of this SKILL.md>/scripts/loop.py"
+```
+
+Tell the user the watch is running, that the daily log is
+`<PROD_MONITOR_WORKDIR>/logs/<dd-MM-yyyy>.txt`, that each run's reports land in
+`<PROD_MONITOR_WORKDIR>/tickets/<dd-MM-yyyy>/`, and that the loop lives only in this
+session: closing the session stops it (a run in progress resumes when the skill is
+invoked again).
+
+If it exits at once with code 3, a loop from this or another session already watches
+that workdir. Tell the user and stop.
+
+## Step 2 — When the loop exits
+
+The background task's output says why. Relay it to the user in a few lines, then:
+
+- **Exit 0**: a run created tickets (relay the ticket list and the report path), a run
+  failed at a stage after three attempts, or an issue was given up after three
+  attempts. Start the loop again (Step 1, without the intro).
+- **Exit 2**: the config is missing or invalid, `gcloud` kept failing (not logged in,
+  no access, not installed) or the Linear connector is unavailable. Do not restart.
+  Tell the user what to fix (`~/.claude/settings.json`, `gcloud auth login`, or
+  reconnect with `/mcp`) and invoke the skill again; the interrupted run resumes.
+- **Any other exit code**: the loop crashed. Relay the last lines of its output and do
+  not restart; the user decides.
+
+## How a run works
+
+Every `TICK` (60 s) the loop first finishes any incomplete run, then, when the end of
+the last fetched window is a full interval old, starts a new run for the logs since
+then (a gap longer than a day is not caught up: the run reads one interval). A run is
+`<workdir>/<dd-MM-yyyy-HH-mm>/` and goes through these stages; each leaves
+`state/<stage>.done`, per-issue steps leave one JSON file per issue, so a stopped loop
+redoes only what has no result yet:
+
+| Stage | Model | Output |
+|---|---|---|
+| fetch | none (`gcloud logging read`, severity ≥ WARNING, the namespaces) | `gcp-logs/logs.json`, `digest.md` (deterministic grouping by service, severity and normalized message) |
+| triage | opus, medium | `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
+| findings | opus, high, one session per issue, in parallel | `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
+| challenge | opus, high, one session per finding | `challenged-findings/<issue>.md` + `.json`: confirmed, partially_confirmed or rejected, with corrections |
+| tickets | sonnet relay, one Linear `save_issue` per confirmed or partially confirmed finding | `tickets/<issue>.json`; `<workdir>/known-issues.json` remembers the fingerprint and ticket |
+| prs (opt-in) | opus, medium | `prs/<issue>.json`: a draft PR from a worktree under `<workdir>/worktrees` |
+| report | none | `<workdir>/tickets/<dd-MM-yyyy>/<run>.md` and `report.md`: tickets created, issues investigated without a ticket, recurrences, noise |
+
+A failed session is retried on the next tick, three times; then the issue is recorded as
+failed and the run goes on. A fetch that fails three times stops the loop (exit 2)
+because `gcloud` itself needs the user. Issues whose fingerprint already has a ticket
+are not investigated again; their recurrence is counted in `known-issues.json` and
+listed in the report. Rejected, inconclusive and failed issues are left alone for
+`PROD_MONITOR_SKIP_TTL_HOURS`.
+
+Every session's event stream is kept in `<run>/sessions/<stage>.log`. Everything the
+loop does is appended to `<workdir>/logs/<dd-MM-yyyy>.txt`, one file per day, never
+rewritten.
+
+Investigating sessions get `Bash`, `Read`, `Grep`, `Glob` and `Write`, with
+`PROD_MONITOR_GUARD=1` so the hook keeps production and the user's checkouts
+read-only, and `PROD_MONITOR_WRITABLE` limited to the stage's output directory and
+`<workdir>/worktrees`. They read code from detached worktrees of `origin/<default>`,
+may run `gcloud logging read` for more context and read-only `kubectl` on the pods.
+The Linear relay session has only the `save_issue` tool, no hooks and no skills, and
+receives the ticket text as data.
