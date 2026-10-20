@@ -139,6 +139,6 @@ session that reads the channel cannot post, and the one that posts never
 sees the channel, so a crafted message cannot make it post.
 
 The connector relay stays on Haiku with hooks, skills, project settings and auto-memory
-disabled, a bounded response and no session persistence. It never uses a Slack API token.
+disabled and a bounded response. It never uses a Slack API token.
 Token logs distinguish cached reads/writes and include every connector attempt. Silent
 local ticks use no model; only connector reads/posts and review sessions do.

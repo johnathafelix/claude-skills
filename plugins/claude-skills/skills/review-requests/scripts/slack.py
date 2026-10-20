@@ -109,7 +109,6 @@ def run(tool, schema, prompt, cwd):
                 "--disable-slash-commands",
                 "--setting-sources", "user",
                 "--settings", json.dumps({"disableAllHooks": True, "autoMemoryEnabled": False}),
-                "--no-session-persistence",
                 "--system-prompt", "You relay Slack tool calls for a script and answer only in the requested JSON.",
                 "--json-schema", json.dumps(schema),
                 "--output-format", "stream-json",
