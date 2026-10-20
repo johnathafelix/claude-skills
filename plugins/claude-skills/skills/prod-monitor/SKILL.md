@@ -62,7 +62,7 @@ Optional:
 - `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` (default 5), `PROD_MONITOR_CONTEXT_AFTER_MINUTES`
   (default 1) and `PROD_MONITOR_CONTEXT_LIMIT` (default 500): how much all-severity
   context is fetched around each issue's sample entries for the investigators.
-- `PROD_MONITOR_MAX_PARALLEL` (default 4 sessions at once),
+- `PROD_MONITOR_MAX_PARALLEL` (default 3: how many finding or challenge sessions run at once; it bounds the token burn rate, not the total per run),
   `PROD_MONITOR_SESSION_TIMEOUT_SECONDS` (default 1800),
   `PROD_MONITOR_SKIP_TTL_HOURS` (default 24: how long a rejected, inconclusive or
   failed issue is left alone before it is investigated again).

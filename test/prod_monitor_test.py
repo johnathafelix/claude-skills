@@ -71,7 +71,7 @@ class Config(unittest.TestCase):
         self.assertTrue(common.load_config({**self.env, 'PROD_MONITOR_LINEAR_CREATE_LABELS': '1'})['linear_create_labels'])
         self.assertEqual(config['interval'], 3600)
         self.assertEqual(config['log_limit'], 5000)
-        self.assertEqual(config['max_parallel'], 4)
+        self.assertEqual(config['max_parallel'], 3)
         self.assertEqual((config['context_before'], config['context_after'], config['context_limit']), (300, 60, 500))
         self.assertEqual(config['slice_seconds'], 300)
         self.assertFalse(config['open_prs'])

@@ -104,7 +104,7 @@ def load_config(env=None):
         "context_before": env_int(env, "PROD_MONITOR_CONTEXT_BEFORE_MINUTES", 5, minimum=0) * 60,
         "context_after": env_int(env, "PROD_MONITOR_CONTEXT_AFTER_MINUTES", 1, minimum=0) * 60,
         "context_limit": env_int(env, "PROD_MONITOR_CONTEXT_LIMIT", 500),
-        "max_parallel": env_int(env, "PROD_MONITOR_MAX_PARALLEL", 4),
+        "max_parallel": env_int(env, "PROD_MONITOR_MAX_PARALLEL", 3),
         "session_timeout": env_int(env, "PROD_MONITOR_SESSION_TIMEOUT_SECONDS", 1800),
         "reject_ttl": env_int(env, "PROD_MONITOR_SKIP_TTL_HOURS", 24) * 3600,
         "open_prs": env.get("PROD_MONITOR_OPEN_PRS", "0") == "1",
