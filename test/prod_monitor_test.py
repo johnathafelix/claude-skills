@@ -71,6 +71,7 @@ class Config(unittest.TestCase):
         self.assertEqual(config['log_limit'], 5000)
         self.assertEqual(config['max_parallel'], 4)
         self.assertEqual((config['context_before'], config['context_after'], config['context_limit']), (300, 60, 500))
+        self.assertEqual(config['slice_seconds'], 300)
         self.assertFalse(config['open_prs'])
         self.assertEqual((config['triage_model'], config['triage_effort']), ('opus', 'medium'))
         self.assertEqual((config['findings_model'], config['findings_effort']), ('opus', 'high'))
@@ -193,6 +194,13 @@ class Digest(unittest.TestCase):
     def test_normalize_strips_ids(self):
         self.assertEqual(gcp.normalize('order 123 failed for 3f2504e0-4f89-11d3-9a0c-0305e82c3301 at 7f3a9c2b1d4e'), 'order # failed for <uuid> at <hex>')
 
+    def test_slices_cut_the_window_evenly_with_a_short_tail(self):
+        cuts = gcp.slices('2026-10-20T09:00:00Z', '2026-10-20T10:00:00Z', 1500)
+        self.assertEqual(len(cuts), 3)
+        self.assertEqual(cuts[0], ('2026-10-20T09:00:00Z', '2026-10-20T09:25:00Z'))
+        self.assertEqual(cuts[-1], ('2026-10-20T09:50:00Z', '2026-10-20T10:00:00Z'))
+        self.assertEqual(gcp.slices('2026-10-20T09:00:00Z', '2026-10-20T09:00:00Z', 300), [])
+
     def test_context_filter_scopes_by_pods_and_traces_or_falls_back_to_service(self):
         query = gcp.context_filter('payments', {'api-1', 'api-2'}, {'projects/p/traces/abc'}, 'api', '2026-10-20T09:55:00Z', '2026-10-20T10:01:06Z')
         self.assertIn('timestamp>="2026-10-20T09:55:00Z" AND timestamp<"2026-10-20T10:01:06Z"', query)
@@ -225,8 +233,10 @@ class Digest(unittest.TestCase):
         self.assertEqual(first['last_seen'], '2026-10-20T10:00:05Z')
         self.assertEqual(summary['groups'][2]['severity'], 'WARNING')
         self.assertEqual(summary['by_severity'], {'ERROR': 3, 'WARNING': 1})
-        text = gcp.render_digest({'start': 'a', 'end': 'b'}, summary, truncated=True)
-        self.assertIn('truncated', text)
+        text = gcp.render_digest({'start': 'a', 'end': 'b'}, summary, truncated=[{'start': 'a', 'end': 'a2', 'limit': 417}])
+        self.assertIn('1 slice(s) hit their cap', text)
+        self.assertIn('a..a2 (417)', text)
+        self.assertNotIn('Truncated', gcp.render_digest({'start': 'a', 'end': 'b'}, summary, truncated=[]))
         self.assertIn('### g1', text)
 
 
@@ -260,6 +270,27 @@ class FakeTools(unittest.TestCase):
         self.assertEqual(argv[:3], ['logging', 'read', gcp.build_filter(['payments', 'orders'], '2026-10-20T09:00:00Z', '2026-10-20T10:00:00Z')])
         self.assertIn('--project=prod-project', argv)
         self.assertIn('--limit=5000', argv)
+
+    def test_read_window_queries_each_slice_with_its_share_of_the_cap(self):
+        (self.root / 'entries.json').write_text(json.dumps(ENTRIES[:2]))
+        self.script('gcloud', f'printf "%s\\n" "$@" >> "{self.root}/argv"\necho "--" >> "{self.root}/argv"\ncat "{self.root}/entries.json"\n')
+        config = common.load_config({**self.env, 'PROD_MONITOR_FETCH_SLICE_MINUTES': '20', 'PROD_MONITOR_LOG_LIMIT': '5000'})
+        entries, slices, error = gcp.read_window(config, '2026-10-20T09:00:00Z', '2026-10-20T10:00:00Z')
+        self.assertEqual(error, '')
+        self.assertEqual(len(entries), 6)
+        self.assertEqual([s['start'] for s in slices], ['2026-10-20T09:00:00Z', '2026-10-20T09:20:00Z', '2026-10-20T09:40:00Z'])
+        self.assertEqual([(s['entries'], s['limit'], s['truncated']) for s in slices], [(2, 1667, False)] * 3)
+        calls = [c for c in (self.root / 'argv').read_text().split('--\n') if c.strip()]
+        self.assertEqual(len(calls), 3)
+        self.assertIn('timestamp>="2026-10-20T09:20:00Z" AND timestamp<"2026-10-20T09:40:00Z"', calls[1])
+        self.assertIn('--limit=1667', calls[1])
+        self.assertIn('--order=desc', calls[1])
+
+    def test_read_window_reports_the_failing_slice(self):
+        self.script('gcloud', 'echo "ERROR: quota" >&2\nexit 1\n')
+        entries, slices, error = gcp.read_window(self.config, '2026-10-20T09:00:00Z', '2026-10-20T09:10:00Z')
+        self.assertEqual(entries, [])
+        self.assertTrue(error.startswith('slice 2026-10-20T09:00:00Z..2026-10-20T09:05:00Z: gcloud logging read failed'))
 
     def test_read_context_queries_around_the_samples_oldest_first(self):
         (self.root / 'entries.json').write_text(json.dumps([entry('2026-10-20T10:00:00Z', 'INFO', 'start')]))
@@ -435,7 +466,7 @@ class Pipeline(unittest.TestCase):
         self.config = common.load_config(self.env)
         self.work = self.config['workdir']
         self.now = time.mktime((2026, 10, 20, 14, 0, 0, 0, 0, -1))
-        self.read_logs = patch.object(gcp, 'read_logs', return_value=(list(ENTRIES), ''))
+        self.read_logs = patch.object(gcp, 'read_window', return_value=(list(ENTRIES), [{'start': 'a', 'end': 'b', 'entries': 4, 'limit': 5000, 'truncated': False}], ''))
         self.read_logs.start()
         self.addCleanup(self.read_logs.stop)
         self.context = [entry('2026-10-20T09:59:58Z', 'INFO', 'request started order=123'), ENTRIES[0]]
@@ -511,7 +542,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((path / 'report.md').read_text(), text)
 
         log = (self.work / 'logs' / '20-10-2026.txt').read_text()
-        self.assertIn('fetch: 4 entries in 3 groups', log)
+        self.assertIn('fetch: 4 entries in 3 groups for ' + common.iso(self.now - 3600) + '..' + common.iso(self.now) + ' (1 slices, 0 truncated)', log)
+        self.assertEqual(common.read_json(path / 'gcp-logs' / 'slices.json')[0]['entries'], 4)
         self.assertIn('context api-nil-deref: 2 entries for 2026-10-20T09:55:01Z..2026-10-20T10:01:06Z', log)
         self.assertIn('triage: 3 new issues (2 errors, 1 warnings) from 3 groups; 0 known issues folded (0 entries)', log)
         self.assertIn('plan: 2 to investigate, 0 known, 1 not actionable', log)
@@ -629,7 +661,7 @@ class Pipeline(unittest.TestCase):
 
     def test_fetch_failures_retry_then_stop(self):
         self.read_logs.stop()
-        with patch.object(gcp, 'read_logs', return_value=([], 'gcloud logging read failed: not logged in')):
+        with patch.object(gcp, 'read_window', return_value=([], [], 'gcloud logging read failed: not logged in')):
             path = pipeline.create_run(self.config, self.now)
             for _ in range(common.MAX_ATTEMPTS - 1):
                 run = pipeline.process(self.config, path)
@@ -645,7 +677,7 @@ class Pipeline(unittest.TestCase):
 
     def test_empty_window_completes_without_sessions(self):
         self.read_logs.stop()
-        with patch.object(gcp, 'read_logs', return_value=([], '')):
+        with patch.object(gcp, 'read_window', return_value=([], [{'start': 'a', 'end': 'b', 'entries': 0, 'limit': 5000, 'truncated': False}], '')):
             path, fake = self.start()
             run = pipeline.process(self.config, path)
 

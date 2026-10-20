@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The stages of one prod-monitor run, each resumable from its markers.
 
-    fetch      gcloud logging read for the run's window -> gcp-logs/ (no model)
+    fetch      gcloud logging read per time slice of the window -> gcp-logs/ (no model)
     triage     digest groups whose signature belongs to a known issue are folded out, then
                one opus session classifies what is left -> triage/ (no session when nothing is new)
     context    gcloud logging read, all severities around each issue's samples -> triage/issues/ (no model)
@@ -183,17 +183,18 @@ def stage_fetch(run):
     if not window:
         raise StageError("gcp-logs/window.json is missing")
 
-    entries, error = gcp.read_logs(run.config, window["start"], window["end"])
+    entries, slices, error = gcp.read_window(run.config, window["start"], window["end"])
     if error:
         raise StageError(error)
 
     summary = gcp.digest(entries)
-    truncated = len(entries) >= run.config["log_limit"]
+    truncated = [s for s in slices if s["truncated"]]
     write_json_atomic(run.file("gcp-logs", "logs.json"), entries)
+    write_json_atomic(run.file("gcp-logs", "slices.json"), slices)
     write_json_atomic(run.file("gcp-logs", "digest.json"), summary)
     write_text_atomic(run.file("gcp-logs", "digest.md"), gcp.render_digest(window, summary, truncated))
     write_cursor(run.workdir, from_iso(window["end"]))
-    run.note(f"fetch: {len(entries)} entries in {len(summary['groups'])} groups for {window['start']}..{window['end']}" + (" (truncated)" if truncated else ""))
+    run.note(f"fetch: {len(entries)} entries in {len(summary['groups'])} groups for {window['start']}..{window['end']} ({len(slices)} slices, {len(truncated)} truncated)")
 
     return True
 
@@ -400,7 +401,8 @@ def stage_triage(run):
         window = read_json(run.file("gcp-logs", "window.json")) or {}
         fresh_summary = subset(summary, fresh)
         header = f"Groups already attributed to known issues ({len(groups) - len(fresh)} groups, {folded_count} entries) were removed; see known-groups.json.\n\n" if folded else ""
-        write_text_atomic(run.file("triage", "digest.md"), header + gcp.render_digest(window, fresh_summary, summary["total"] >= run.config["log_limit"]))
+        truncated = [s for s in read_json(run.file("gcp-logs", "slices.json")) or [] if s.get("truncated")]
+        write_text_atomic(run.file("triage", "digest.md"), header + gcp.render_digest(window, fresh_summary, truncated))
         prompt = render_prompt(
             "triage",
             run_dir=run.path,

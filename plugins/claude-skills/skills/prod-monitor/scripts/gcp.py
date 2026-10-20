@@ -68,10 +68,45 @@ def run_query(project, query, limit, order):
 
 
 def read_logs(config, start, end):
-    """The newest `log_limit` entries of the run's window, at or above the severity floor."""
+    """The newest `log_limit` entries of one window, at or above the severity floor."""
     query = build_filter(config["namespaces"], start, end, config["min_severity"], config["extra_filter"])
 
     return run_query(config["gcp_project"], query, config["log_limit"], "desc")
+
+
+def slices(start, end, slice_seconds):
+    """[start, end) cut into consecutive slices of `slice_seconds` (the last one shorter), as ISO pairs."""
+    first, last = from_iso(start), from_iso(end)
+    cuts = []
+    cursor = first
+    while cursor < last:
+        cuts.append((iso(cursor), iso(min(cursor + slice_seconds, last))))
+        cursor += slice_seconds
+
+    return cuts
+
+
+def read_window(config, start, end):
+    """(entries, slices, error): the window read slice by slice, each slice keeping its newest
+    share of `log_limit`, so a noisy hour is sampled evenly instead of newest-only.
+    Each slice record says how many entries it returned and whether it hit its cap."""
+    cuts = slices(start, end, config["slice_seconds"])
+    if not cuts:
+        return [], [], "empty window"
+
+    per_slice = max(1, -(-config["log_limit"] // len(cuts)))
+    entries = []
+    records = []
+    for slice_start, slice_end in cuts:
+        query = build_filter(config["namespaces"], slice_start, slice_end, config["min_severity"], config["extra_filter"])
+        found, error = run_query(config["gcp_project"], query, per_slice, "desc")
+        if error:
+            return [], records, f"slice {slice_start}..{slice_end}: {error}"
+
+        entries.extend(found)
+        records.append({"start": slice_start, "end": slice_end, "entries": len(found), "limit": per_slice, "truncated": len(found) >= per_slice})
+
+    return sorted(entries, key=lambda e: e.get("timestamp", "")), records, ""
 
 
 def pod_of(entry):
@@ -263,12 +298,19 @@ def digest(entries):
 
 
 def render_digest(window, summary, truncated):
+    """`truncated` lists the slices that hit their cap, as {start, end, limit} records."""
     lines = [
         "# Log digest",
         "",
         f"- Window: {window['start']} to {window['end']} (UTC)",
-        f"- Entries: {summary['total']}" + (" (truncated at the configured limit; the newest entries were kept)" if truncated else ""),
+        f"- Entries: {summary['total']}",
         f"- Groups: {len(summary['groups'])}",
+    ]
+    if truncated:
+        lines.append(f"- Truncated: {len(truncated)} slice(s) hit their cap, so only their newest entries are here: "
+                     + ", ".join(f"{s['start']}..{s['end']} ({s['limit']})" for s in truncated))
+
+    lines += [
         "",
         "## By severity",
         "",

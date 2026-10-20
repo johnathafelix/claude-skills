@@ -101,6 +101,7 @@ def load_config(env=None):
         "min_severity": env_choice(env, "PROD_MONITOR_MIN_SEVERITY", "WARNING", SEVERITIES),
         "extra_filter": env.get("PROD_MONITOR_EXTRA_FILTER", "").strip(),
         "log_limit": env_int(env, "PROD_MONITOR_LOG_LIMIT", 5000),
+        "slice_seconds": env_int(env, "PROD_MONITOR_FETCH_SLICE_MINUTES", 5) * 60,
         "context_before": env_int(env, "PROD_MONITOR_CONTEXT_BEFORE_MINUTES", 5, minimum=0) * 60,
         "context_after": env_int(env, "PROD_MONITOR_CONTEXT_AFTER_MINUTES", 1, minimum=0) * 60,
         "context_limit": env_int(env, "PROD_MONITOR_CONTEXT_LIMIT", 500),

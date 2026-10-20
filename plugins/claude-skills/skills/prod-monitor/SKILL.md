@@ -49,8 +49,11 @@ Optional:
 
 - `PROD_MONITOR_INTERVAL`: `30m`, `1h`, `2h`, ... Default `1h`.
 - `PROD_MONITOR_MIN_SEVERITY` (default `WARNING`), `PROD_MONITOR_EXTRA_FILTER` (a
-  Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000,
-  the newest entries are kept when a window has more).
+  Cloud Logging clause ANDed to the query), `PROD_MONITOR_LOG_LIMIT` (default 5000
+  entries per run, shared evenly across the slices) and
+  `PROD_MONITOR_FETCH_SLICE_MINUTES` (default 5: the window is read slice by slice and
+  each slice keeps its newest entries up to its share, so truncation never hides the
+  start of the hour).
 - `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` (default 5), `PROD_MONITOR_CONTEXT_AFTER_MINUTES`
   (default 1) and `PROD_MONITOR_CONTEXT_LIMIT` (default 500): how much all-severity
   context is fetched around each issue's sample entries for the investigators.
@@ -111,7 +114,7 @@ redoes only what has no result yet:
 
 | Stage | Model | Output |
 |---|---|---|
-| fetch | none (`gcloud logging read`, severity ≥ WARNING, the namespaces) | `gcp-logs/logs.json`, `digest.md` (deterministic grouping by service, severity and normalized message) |
+| fetch | none (`gcloud logging read` per slice, severity ≥ WARNING, the namespaces) | the window is read in `PROD_MONITOR_FETCH_SLICE_MINUTES` slices, each keeping its newest share of `PROD_MONITOR_LOG_LIMIT`, so a noisy hour is sampled evenly; `gcp-logs/logs.json`, `slices.json` (per-slice counts and which hit their cap), `digest.md` (deterministic grouping by service, severity and normalized message) |
 | triage | opus, medium, only on what is new | groups whose log signature a known issue remembered are folded out first (`triage/known-groups.json`) and listed as recurrences; the session classifies the rest from `triage/digest.md`, and is skipped when nothing is new. Writes `triage/triage.md`, `issues.json` (service, severity, fingerprint, actionable), `plan.json` (investigate / known / ignore) |
 | context | none (`gcloud logging read`, every severity, INFO included) | `triage/issues/<issue>.context.md` + `.json`: the entries from the same pods or traces as the issue's samples, from `PROD_MONITOR_CONTEXT_BEFORE_MINUTES` before the first sample to `PROD_MONITOR_CONTEXT_AFTER_MINUTES` after the last, oldest first, up to `PROD_MONITOR_CONTEXT_LIMIT` |
 | findings | opus, high, one session per issue, in parallel | `findings/<issue>.md` + `.json`: evidence, probable root cause, proposed fix, confidence |
