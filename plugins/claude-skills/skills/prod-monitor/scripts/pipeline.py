@@ -35,7 +35,10 @@ PRIORITY = {"error": 2, "warning": 4}
 TICKET_VERDICTS = ("confirmed", "partially_confirmed")
 SAMPLE_LINES = 3
 MAX_DESCRIPTION = 20000
-INVESTIGATE_TOOLS = ("Bash", "Read", "Grep", "Glob", "Write")
+INVESTIGATE_TOOLS = ("Bash", "Read", "Grep", "Glob", "Write", "ToolSearch")
+# Datadog MCP servers an investigator may call when one is configured (the datadog plugin or
+# the claude.ai connector); the prod-guard hook limits them to their read-only tools.
+DATADOG_SERVERS = ("mcp__plugin_datadog_mcp", "mcp__claude_ai_Datadog")
 LINEAR_SAVE = "mcp__claude_ai_Linear__save_issue"
 LINEAR_LABELS = "mcp__claude_ai_Linear__list_issue_labels"
 LINEAR_TEAM = "mcp__claude_ai_Linear__get_team"
@@ -639,6 +642,7 @@ def investigate(run, issue):
         cwd=run.path,
         schema=FINDING_SCHEMA,
         tools=INVESTIGATE_TOOLS,
+        allowed_tools=DATADOG_SERVERS,
         add_dirs=(run.workdir, run.config["repos_dir"]),
         writable=(run.file("findings"), run.workdir / "worktrees"),
     )
@@ -708,6 +712,7 @@ def challenge(run, issue):
         cwd=run.path,
         schema=CHALLENGE_SCHEMA,
         tools=INVESTIGATE_TOOLS,
+        allowed_tools=DATADOG_SERVERS,
         add_dirs=(run.workdir, run.config["repos_dir"]),
         writable=(run.file("challenged-findings"), run.workdir / "worktrees"),
     )

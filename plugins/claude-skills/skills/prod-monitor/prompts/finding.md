@@ -18,6 +18,7 @@ Use git log and git show in the worktree to see what changed recently in the sus
 More evidence, all read-only:
 - Cloud Logging: gcloud logging read '<filter>' --project={{gcp_project}} --format=json --limit=200 for other severities, neighbouring services, the same trace id, or the minutes before the first failure.
 - Kubernetes: kubectl -n {{namespace}} get, describe, logs, top and events on the pods of {{service}}: restarts, OOMKills, recent rollouts, image tag, env and config. A hook denies every mutating command; never exec into a pod.
+- Datadog, when its MCP server is configured: call ToolSearch with query "+datadog" once; if it returns tools, load the relevant Datadog skill first (load_datadog_skill, for example datadog/logs or datadog/traces) and use search/aggregate/analyze tools for APM traces of the failing requests, error rates and latency of {{service}} and its dependencies around the window, and log patterns. Read-only tools only; the hook denies the rest. No Datadog tools means it is not configured: rely on Cloud Logging and kubectl.
 
 Method:
 1. Reconstruct the failure path from the logs: which request or job, which code path, which dependency.

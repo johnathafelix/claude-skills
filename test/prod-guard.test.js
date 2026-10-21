@@ -112,6 +112,21 @@ test("mutating production and destructive repo commands are denied", () => {
   }
 });
 
+test("datadog MCP tools are limited to reads", () => {
+  for (const tool of ["mcp__plugin_datadog_mcp__search_datadog_logs", "mcp__plugin_datadog_mcp__get_datadog_trace", "mcp__plugin_datadog_mcp__aggregate_spans", "mcp__plugin_datadog_mcp__analyze_datadog_logs", "mcp__plugin_datadog_mcp__list_datadog_skills", "mcp__plugin_datadog_mcp__load_datadog_skill", "mcp__plugin_datadog_mcp__execute_code", "mcp__claude_ai_Datadog__search_logs", "mcp__claude_ai_Datadog__authenticate"]) {
+    assert.strictEqual(run(tool, { query: "status:error" }), null, "should allow: " + tool);
+  }
+
+  for (const tool of ["mcp__plugin_datadog_mcp__create_datadog_notebook", "mcp__plugin_datadog_mcp__update_datadog_monitor", "mcp__plugin_datadog_mcp__mute_datadog_monitor", "mcp__plugin_datadog_mcp__delete_datadog_dashboard", "mcp__claude_ai_Datadog__create_incident"]) {
+    const out = run(tool, {});
+    assert.ok(out && out.permissionDecision === "deny", "should deny: " + tool);
+    assert.match(out.permissionDecisionReason, /^prod-monitor guard: .*only read from Datadog/);
+  }
+
+  assert.strictEqual(run("mcp__claude_ai_Linear__save_issue", {}), null, "other servers are not the guard's business");
+  assert.strictEqual(run("mcp__plugin_datadog_mcp__create_datadog_notebook", {}, { PROD_MONITOR_GUARD: "" }), null);
+});
+
 test("inactive without PROD_MONITOR_GUARD=1", () => {
   for (const command of DENIED) {
     assert.strictEqual(run("Bash", { command }, { PROD_MONITOR_GUARD: "" }), null, "should allow when inactive: " + command);

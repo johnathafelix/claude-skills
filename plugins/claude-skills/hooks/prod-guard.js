@@ -7,6 +7,11 @@
  * own shell to get the same protection in an interactive session). Inactive, it
  * allows everything, so ordinary sessions are not affected.
  *
+ * Datadog MCP tools (the datadog plugin's server or the claude.ai connector): only
+ * read-only tools are allowed, by name (search_*, get_*, list_*, aggregate_*,
+ * analyze_*, load_*, ask_*, execute_code and the authentication handshake);
+ * anything that creates, updates, mutes or deletes is denied.
+ *
  * Bash: every segment of the command (split on ; && || | newlines and command
  * substitutions) is checked by the program it runs:
  *   kubectl    allowed only for read-only subcommands (get, describe, logs, top,
@@ -314,6 +319,16 @@ function checkWrite(target, cwd, writable) {
   return inside ? "" : `writing ${resolved} is not allowed: this session may only write under ${roots.join(", ") || "(nothing)"}.`;
 }
 
+const DATADOG_SERVERS = /^mcp__(plugin_datadog_mcp|claude_ai_Datadog)__(.+)$/;
+const DATADOG_READ_ONLY = /^(search_|get_|list_|aggregate_|analyze_|load_|ask_|execute_code$|authenticate$|complete_authentication$)/;
+
+function checkMcp(tool) {
+  const match = typeof tool === "string" ? tool.match(DATADOG_SERVERS) : null;
+  if (!match) return "";
+
+  return DATADOG_READ_ONLY.test(match[2]) ? "" : `${tool} is not allowed: this session may only read from Datadog (search, get, list, aggregate, analyze), never create, change, mute or delete anything.`;
+}
+
 function main() {
   if (process.env.PROD_MONITOR_GUARD !== "1") return allow();
 
@@ -331,6 +346,8 @@ function main() {
     reason = checkCommand(input.command);
   } else if (WRITE_TOOLS.has(tool)) {
     reason = checkWrite(input.file_path || input.notebook_path, payload.cwd, process.env.PROD_MONITOR_WRITABLE);
+  } else {
+    reason = checkMcp(tool);
   }
 
   return reason ? deny(reason) : allow();
@@ -338,4 +355,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { checkCommand, checkWrite };
+module.exports = { checkCommand, checkWrite, checkMcp };

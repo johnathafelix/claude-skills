@@ -76,6 +76,10 @@ Optional:
 Also needed: the Google Cloud SDK (`gcloud`) logged in with access to the project's
 logs, `kubectl` with a context that can read the namespaces (for pod inspection), the
 Linear connector connected in Claude Code (`/mcp`), and the plugin up to date.
+Optional: a Datadog MCP server (the `datadog` plugin from the official marketplace, or
+the claude.ai Datadog connector). When one is configured, the investigating and
+challenging sessions use its read-only tools for traces, error rates, latency and log
+analytics; without one they rely on Cloud Logging and `kubectl`.
 
 ## Step 1 — Start the loop
 
@@ -146,11 +150,13 @@ Every session's event stream is kept in `<run>/sessions/<stage>.log`. Everything
 loop does is appended to `<workdir>/logs/<dd-MM-yyyy>.txt`, one file per day, never
 rewritten.
 
-Investigating sessions get `Bash`, `Read`, `Grep`, `Glob` and `Write`, with
-`PROD_MONITOR_GUARD=1` so the hook keeps production and the user's checkouts
+Investigating sessions get `Bash`, `Read`, `Grep`, `Glob`, `Write` and `ToolSearch`,
+with `PROD_MONITOR_GUARD=1` so the hook keeps production and the user's checkouts
 read-only, and `PROD_MONITOR_WRITABLE` limited to the stage's output directory and
 `<workdir>/worktrees`. They start from the issue's all-severity context file, read code from detached
 worktrees of `origin/<default>`, may run `gcloud logging read` for anything the
-context window misses and read-only `kubectl` on the pods.
+context window misses and read-only `kubectl` on the pods. The Datadog MCP servers are
+allowed for them, and the hook denies every Datadog tool that is not a read (search,
+get, list, aggregate, analyze, load, ask).
 The Linear relay session has only the `save_issue` tool, no hooks and no skills, and
 receives the ticket text as data.

@@ -423,10 +423,12 @@ class FakeSessions:
         self.bug_exists = True
         self.label_tools = None
         self.duplicates = {}
+        self.tools = {}
 
     def __call__(self, config, *, event_log, prompt, writable=(), **kwargs):
         name = event_log.stem
         self.calls.append((name, kwargs.get('model'), kwargs.get('effort'), prompt))
+        self.tools[name] = (kwargs.get('tools'), kwargs.get('allowed_tools'))
         stage = name.split('-')[0]
         if name in self.fail:
             self.fail.discard(name)
@@ -490,6 +492,10 @@ class Pipeline(unittest.TestCase):
         self.read_context = patch.object(gcp, 'read_context', return_value=(self.context, {'start': '2026-10-20T09:55:01Z', 'end': '2026-10-20T10:01:06Z', 'query': 'q'}, ''))
         self.read_context.start()
         self.addCleanup(self.read_context.stop)
+
+    def today_log(self):
+        """The daily log the pipeline wrote: named by the real clock, not the run's pinned window."""
+        return (self.work / 'logs' / f"{common.day_for(time.time())}.txt").read_text()
 
     def start(self, fail=()):
         path = pipeline.create_run(self.config, self.now)
@@ -558,7 +564,7 @@ class Pipeline(unittest.TestCase):
         self.assertIn('- worker retries (1 occurrences)', text)
         self.assertEqual((path / 'report.md').read_text(), text)
 
-        log = (self.work / 'logs' / '20-10-2026.txt').read_text()
+        log = self.today_log()
         self.assertIn('fetch: 4 entries in 3 groups for ' + common.iso(self.now - 3600) + '..' + common.iso(self.now) + ' (1 slices, 0 truncated)', log)
         self.assertEqual(common.read_json(path / 'gcp-logs' / 'slices.json')[0]['entries'], 4)
         self.assertIn('context api-nil-deref: 2 entries for 2026-10-20T09:55:01Z..2026-10-20T10:01:06Z', log)
@@ -581,6 +587,13 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(common.read_json(self.work / 'linear-labels.json'), {'team': 'ENG', 'resolved': {'prod-monitor': {'name': 'prod-monitor', 'id': 'lbl-1'}, 'bug': {'name': 'Bug', 'id': 'lbl-2'}}})
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'labels'), 1)
         self.assertEqual(sum(1 for c in fake.calls if c[0].startswith('dedupe-')), 0)
+        for name in ('finding-api-nil-deref', 'challenge-api-nil-deref'):
+            self.assertEqual(fake.tools[name], (pipeline.INVESTIGATE_TOOLS, pipeline.DATADOG_SERVERS))
+            self.assertIn('ToolSearch', fake.tools[name][0])
+
+        self.assertEqual(fake.tools['triage'][1], None)
+        for name in ('finding-api-nil-deref', 'challenge-api-nil-deref'):
+            self.assertIn('Datadog, when its MCP server is configured', [c for c in fake.calls if c[0] == name][0][3])
         self.assertIn('title: [api] nil deref in order handler', linear_prompt)
         self.assertIn('priority: 2', linear_prompt)
         self.assertIn('add check and test', linear_prompt)
@@ -612,7 +625,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(folded['api:nil-deref:handler']['ticket'], 'ENG-123')
         synthesized = common.read_json(later / 'triage' / 'issues' / 'api-nil-deref.json')
         self.assertEqual((synthesized['severity'], synthesized['count'], synthesized['known_ticket'], len(synthesized['sample_entries'])), ('error', 2, 'ENG-123', 2))
-        self.assertIn('1 new issues (0 errors, 1 warnings) from 1 groups; 2 known issues folded (3 entries)', (self.work / 'logs' / '20-10-2026.txt').read_text())
+        self.assertIn('1 new issues (0 errors, 1 warnings) from 1 groups; 2 known issues folded (3 entries)', self.today_log())
         self.assertEqual([c[0] for c in fake.calls if c[0] != 'triage' and 'later' not in c[0]][-1:], ['linear-api-nil-deref'])
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'triage'), 2)
         known = common.read_json(self.work / 'known-issues.json')
@@ -787,7 +800,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((entry['recurrences'], entry['run'], len(entry['signatures'])), (1, run.id, 2))
         self.assertIn('ENG-7 — nil deref in order handler', (path / 'report.md').read_text())
         self.assertEqual(run.alerts, [])
-        log = (self.work / 'logs' / '20-10-2026.txt').read_text()
+        log = self.today_log()
         self.assertIn('findings api-nil-deref: same problem as ENG-7 (order handler nil pointer), not investigated', log)
 
     def test_a_ticket_created_during_investigation_is_not_duplicated(self):
@@ -814,7 +827,7 @@ class Pipeline(unittest.TestCase):
         pipeline.process(self.config, path)
         self.assertEqual(sum(1 for c in fake.calls if c[0] == 'dedupe-findings'), 1)
         self.assertEqual(common.read_json(path / 'tickets' / 'api-nil-deref.json')['identifier'], 'ENG-123')
-        log = (self.work / 'logs' / '20-10-2026.txt').read_text()
+        log = self.today_log()
         self.assertEqual(log.count('findings: duplicate check failed, proceeding without it: boom'), 1)
 
     def test_without_labels_no_lookup_runs_and_the_field_is_left_out(self):
